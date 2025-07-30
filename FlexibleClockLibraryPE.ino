@@ -3,9 +3,12 @@
 #include <HTTPClient.h>
 
 HTTPClient http;
+byte httpsProxy = true;
+String httpsProxyURL = "http://127.0.0.1:8080/fetch/"; //example: "http://127.0.0.1:8080/fetch/"
+
 
 M5GFX display;
-String FCLver = "v1.1s0 m5paper";
+String FCLver = "v1.1s1 m5paper";
 
 int tx, ty;
 int x, y;
@@ -2394,9 +2397,11 @@ void openSimpleBrowser(M5GFX &display) {
     }
 
     String address = showSimpleKeyboard(display);
-    if (!address.startsWith("http://") && !address.startsWith("https://")) {
+    if (!address.startsWith("http://") && !address.startsWith("https://") && httpsProxy == false) {
       address = "http://" + address;
-    }
+    }else{
+      address = httpsProxyURL + "https://" + address;
+      }
 
     display.clear(TFT_WHITE);
     display.drawString("connecting to:", 20, 20);
@@ -2448,7 +2453,7 @@ void openSimpleBrowser(M5GFX &display) {
       if (tag.indexOf(' ') != -1) baseTag = tag.substring(0, tag.indexOf(' '));
 
       if (baseTag != "h1" && baseTag != "h2" && baseTag != "h3" && baseTag != "h4" &&
-          baseTag != "p" && baseTag != "a" && baseTag != "div") {
+          baseTag != "p" && baseTag != "a" && baseTag != "test") {
         pos = close + 1;
         continue;
       }
@@ -2500,13 +2505,13 @@ void openSimpleBrowser(M5GFX &display) {
         display.setTextColor(TFT_BLACK);
       }
 
-      if (baseTag == "div") {
+      if (baseTag == "test") {
         display.drawRoundRect(6, y - 4, 468, lineHeight + 4, 4, TFT_LIGHTGREY);
         display.setCursor(12, y + 1);
       }
 
       String line = content;
-      int maxWidth = 460;
+      int maxWidth = 530;
       while (line.length() > 0) {
         int cut = line.length();
         while (display.textWidth(line.substring(0, cut)) > maxWidth && cut > 0) cut--;
@@ -2682,7 +2687,8 @@ void openSettings(){
   if(display.getTouch(&x, &y)) { 
     if (x < 20 && y < 20) break; 
     if (x >= 390 && x <= 490 && y >= 100 && y <= 150) { batteryStatus = !batteryStatus; delay(200);}
-    if (x >= 20 && x <= 490 && y >= 260 && y <= 310) { keyTest = showSimpleKeyboard(display);}
+    if (x >= 20 && x <= 460 && y >= 260 && y <= 310) { httpsProxyURL = showSimpleKeyboard(display);}
+    if (x >= 461 && x <= 490 && y >= 260 && y <= 310) { httpsProxy = !httpsProxy; delay(200);}
     if (x >= 20 && x <= 172 && y >= 340 && y <= 390) { WiFi.disconnect(true); wifi_mode = 2; delay(300);}
     if (x >= 179 && x <= 331 && y >= 340 && y <= 390) { WiFi.mode(WIFI_OFF); wifi_mode = 0; delay(300); }
     if (x >= 338 && x <= 490 && y >= 340 && y <= 390) { WiFi.mode(WIFI_AP); WiFi.softAP("Wemos", "wemos1234"); wifi_mode = 3;}
@@ -2711,9 +2717,11 @@ void openSettings(){
     //}
     display.drawString("buz test", pianoX + 50, pianoY + 5);
     //--- keyboard ---
+    display.drawString("proxy for https", 100, 265);
     display.fillRect(20, 260, 490, 50, TFT_WHITE);
     display.drawRect(20, 260, 490, 50, TFT_BLACK);
-    display.drawString(keyTest, 270, 295);
+    display.drawString(httpsProxyURL, 230, 295);
+    display.drawString(httpsProxy ? "on" : "off", 480, 295);
     //--- wifi set ---
     display.drawString("wifi", 60, 345);
     // Кнопка 1 (WiFi.disconnect)
@@ -2810,7 +2818,7 @@ String showSimpleKeyboard(M5GFX &display) {
         // Особливий випадок для OK (дві букви)
       //  if (label == "OK") return input; // пропустити 'K'
 
-        display.drawString(label, x + keyW / 2, y + keyH / 2);
+        display.drawString(label, x + keyW / 2, (y - 10) + keyH / 2);
       }
     }
   }
