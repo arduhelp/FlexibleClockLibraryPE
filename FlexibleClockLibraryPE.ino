@@ -1,18 +1,36 @@
+//------------
+//--- beacon flood ---
+//https://github.com/Tnze/esp32_beaconSpam/blob/master/esp32_beaconSpam/esp32_beaconSpam.ino
+//------------
 #include <M5GFX.h>
+#include "esp_wifi.h"
+#include "esp_event.h"
+#include "esp_system.h"
+#include "nvs_flash.h"
+#include "esp_netif.h"
+
+extern "C" {
+  esp_err_t esp_wifi_set_channel(uint8_t primary, wifi_second_chan_t second);
+  esp_err_t esp_wifi_80211_tx(wifi_interface_t ifx, const void *buffer, int len, bool en_sys_seq);
+}
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WebServer.h>
 
+WebServer server(80);
 HTTPClient http;
 byte httpsProxy = true;
 String httpsProxyURL = "http://127.0.0.1:8080/fetch/"; //example: "http://127.0.0.1:8080/fetch/"
+String wpurl = ""; //---v---
+const char* WallpaperURL = "http://127.0.0.1:8000/image.jpg"; //example: "http://127.0.0.1:8080/image,jpg"
 
 
 M5GFX display;
-String FCLver = "v1.1s5 m5paper";
+String FCLver = "v1.1s6 m5paper";
 
 int tx, ty;
 int x, y;
-String password = "";
+String password = ""; //your unlock pass
 
 
 byte batteryStatus = true;
@@ -20,6 +38,11 @@ char wifi_mode = 0;
 #define BAT_ADC_PIN 3  // GPIO3 (пін G3)
 #define BUZZER_PIN 21
 
+struct APinfo {
+  String ssid;
+  uint8_t bssid[6];
+  int channel;
+};
 
 // ----------------- Іконки ------------------
 // 'off', 16x16px
@@ -167,6 +190,17 @@ const unsigned char item_bitmap_game [] PROGMEM = {
   0x03, 0x03, 0xc0, 0xc0, 0x03, 0x03, 0xc0, 0xc0, 0xfc, 0x00, 0x00, 0x3f, 0xfc, 0x00, 0x00, 0x3f,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
+// 'browser', 32x32px
+const unsigned char item_bitmap_browser [] PROGMEM = {
+  0x00, 0xfc, 0x3f, 0x00, 0x00, 0xfc, 0x3f, 0x00, 0xc0, 0x03, 0xc0, 0x03, 0xc0, 0x03, 0xc0, 0x03,
+  0x30, 0x00, 0x0f, 0x0c, 0x30, 0x00, 0x0f, 0x0c, 0x0c, 0x00, 0xff, 0x30, 0x0c, 0x00, 0xff, 0x30,
+  0x0c, 0x00, 0xff, 0x30, 0x0c, 0x00, 0xff, 0x30, 0x03, 0x00, 0xfc, 0xc3, 0x03, 0x00, 0xfc, 0xc3,
+  0x03, 0x00, 0xf0, 0xc0, 0x03, 0x00, 0xf0, 0xc0, 0x03, 0x00, 0x30, 0xc0, 0x03, 0x00, 0x30, 0xc0,
+  0x03, 0x00, 0x0c, 0xc0, 0x03, 0x00, 0x0c, 0xc0, 0x03, 0x30, 0x00, 0xc0, 0x03, 0x30, 0x00, 0xc0,
+  0x03, 0x3f, 0x03, 0xc0, 0x03, 0x3f, 0x03, 0xc0, 0xcc, 0xff, 0x00, 0x30, 0xcc, 0xff, 0x00, 0x30,
+  0x0c, 0xff, 0x00, 0x30, 0x0c, 0xff, 0x00, 0x30, 0x30, 0x30, 0x00, 0x0c, 0x30, 0x30, 0x00, 0x0c,
+  0xc0, 0x03, 0xc0, 0x03, 0xc0, 0x03, 0xc0, 0x03, 0x00, 0xfc, 0x3f, 0x00, 0x00, 0xfc, 0x3f, 0x00
+};
 // 'settings', 32x32px
 const unsigned char item_bitmap_settings [] PROGMEM = {
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -178,6 +212,18 @@ const unsigned char item_bitmap_settings [] PROGMEM = {
   0xc0, 0x0f, 0xf0, 0x03, 0xc0, 0x0f, 0xf0, 0x03, 0xc0, 0x0c, 0xf0, 0x03, 0xc0, 0x0c, 0xf0, 0x03,
   0x00, 0x03, 0xf0, 0x03, 0x00, 0x03, 0xf0, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
+// 'terminal', 32x32px
+const unsigned char item_bitmap_terminal [] PROGMEM = {
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+  0xf0, 0x00, 0x00, 0x00, 0xf0, 0x00, 0x00, 0x00, 0xc0, 0x03, 0x00, 0x00, 0xc0, 0x03, 0x00, 0x00, 
+  0x00, 0x0f, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x00, 
+  0x00, 0xf0, 0x00, 0x00, 0x00, 0xf0, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x00, 
+  0x00, 0x0f, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0xc0, 0x03, 0x00, 0x00, 0xc0, 0x03, 0x00, 0x00, 
+  0xf0, 0x00, 0xff, 0x0f, 0xf0, 0x00, 0xff, 0x0f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
 
 
 // 'lockscreen', 540x960px
@@ -6319,6 +6365,45 @@ const unsigned char wp_wallpaper [] PROGMEM = {
 };
 
 
+//--- AI code 60% ---
+void drawJPGfromURL(const char* url, int x, int y) {
+  HTTPClient http;
+  http.begin(url);
+  int httpCode = http.GET();
+
+  if (httpCode == 200) {
+    int len = http.getSize();
+    display.setCursor(display.width() + 10, display.height() - 17);
+    display.setTextColor(TFT_BLACK);
+    display.println(len);
+    display.display();
+    WiFiClient* stream = http.getStreamPtr();
+
+    uint8_t* jpgData = (uint8_t*)malloc(len);
+    if (!jpgData) {
+      //Serial.println("Not enough memory!");
+      return;
+    }
+
+    int bytesRead = 0;
+    while (http.connected() && bytesRead < len) {
+      if (stream->available()) {
+        jpgData[bytesRead++] = stream->read();
+      }
+    }
+
+    // Тепер малюємо JPG
+    display.drawJpg(jpgData, len, x, y);
+
+    free(jpgData);
+  } else {
+    //Serial.print("HTTP error: ");
+    //Serial.println(httpCode);
+  }
+
+  http.end();
+}
+//--- end AI code 60% ---
 
 
 // ----------------- Тип кнопки ------------------
@@ -6333,6 +6418,7 @@ struct Button {
 
 // ----------------- Прототипи ------------------
 void LockApp();
+void openTERMINALApp();
 void openWiFiApp();
 void openPaintApp();
 void openNotesApp();
@@ -6349,11 +6435,11 @@ void connectWiFiUI(M5GFX &display);
 Button buttons[] = {
   {28,  50, 100, 100, "Wi-Fi", item_bitmap_wifi,  openWiFiApp},
   {156, 50, 100, 100, "Paint", item_bitmap_image, openPaintApp},
-  {284, 50, 100, 100, "Notes", item_bitmap_notes, openNotesApp},
+  {284, 50, 100, 100, "Terminal", item_bitmap_terminal, openTERMINALApp},
   {412, 50, 100, 100, "Files", item_bitmap_files, openNotesApp},
   {28,  178, 100, 100, "Clock", item_bitmap_clock,  openWiFiApp},
-  {156, 178, 100, 100, "browser", item_bitmap_calc, openBrowserApp},
-  {284, 178, 100, 100, "Games", item_bitmap_game, openNotesApp},
+  {156, 178, 100, 100, "browser", item_bitmap_browser, openBrowserApp},
+  {284, 178, 100, 100, "Games", item_bitmap_game, OpenWebPaintApp},
   {412, 178, 100, 100, "dev tool", item_bitmap_settings, openSettings},
 };
 const int BUTTON_COUNT = sizeof(buttons) / sizeof(buttons[0]);
@@ -6417,7 +6503,7 @@ void taskbar() { //----opti----
   }
   //---battery-status---
   int percent;
-  float minVolt = 3.0;
+  float minVolt = 3.1;
   float maxVolt = 4.2;
   int adc_val = analogRead(BAT_ADC_PIN);
   float voltage = (adc_val / 4095.0) * 3.6;
@@ -6483,7 +6569,14 @@ void LockApp(byte callKeyboard) {
   String pswd;
   display.clear(TFT_WHITE);
   if (callKeyboard == false) {
-    display.drawXBitmap(0, 0, wp_lockscreen, 540, 960, TFT_BLACK);
+    if (WiFi.status() == WL_CONNECTED) {
+      drawJPGfromURL(WallpaperURL, 0, 150);
+    } else {
+      display.drawXBitmap(0, 0, wp_lockscreen, 540, 960, TFT_BLACK);
+    }
+
+
+
   }
 
   delay(500);
@@ -6514,9 +6607,317 @@ void LockApp(byte callKeyboard) {
 
 }
 
+//--- terminal ---
+void openTERMINALApp(){
+  while (true){
+    String cmd = showSimpleKeyboard(display);
+    if(cmd == "/beacon"){wifi_beacon_flooder();}
+    if(cmd == "/paint"){openPaintApp();}
+    if(cmd == "q")return;
+    if(cmd == "")return;
+    }
+  }
 
 
 
+
+
+
+
+//--- ai code ---
+// ==================== 2. BEACON FLOOD ====================
+void wifi_beacon_flooder() {
+  display.clear(TFT_WHITE);
+  display.setTextColor(TFT_BLACK);
+  display.setCursor(10, 30);
+  display.println("Beacon Flood running...");
+  // ==== налаштування ====
+  const uint8_t channels[] = {1, 6, 11};
+  const bool wpa2 = false;
+  const bool appendSpaces = true;
+  const char ssids[] PROGMEM = {
+    "NeverGonnaWiFiYou\n"
+    "GonnaGiveYouLAN\n"
+    "NeverDropYourSignal\n"
+    "GonnaLetYouPing\n"
+    "RunAroundYourRouter\n"
+    "AndDesyncYou\n"
+    "NeverGonnaPacketLoss\n"
+    "SayGoodbyeToLag\n"
+    "NeverGonnaBreakYourConnection\n"
+    "AndDesertYouOnline\n"
+    "NeverGonnaFloodYou\n"
+    "WithBeaconSpam\n"
+    "NeverGonnaCrashYourNet\n"
+    "AndLeaveYouOffline\n"
+    "IJustWannaPingYou\n"
+    "ForeverOnChannel6\n"
+    "WithPacketsFlyingHigh\n"
+    "NoMoreTimeouts\n"
+    "NoMoreLostPackets\n"
+    "JustGoodVibesWiFi\n"
+    "StayConnectedNow\n"
+    "RickRolledBySSID\n"
+    "YouCantEscapeMe\n"
+    "LANIsLoveLANIsLife\n"
+    "WiFiNeverGonnaGiveUp\n"
+    "SSIDNeverGonnaLetDown\n"
+    "RouterKingForever\n"
+    "PingMeBabyOneMoreTime\n"
+    "DropItLikeItsHotspot\n"
+    "FreeRickRollNet\n"
+    "KeepOnLANning\n"
+    "GetYourPingOn\n"
+    "StayOnlineForever\n"
+    "WiFiOnTheDanceFloor\n"
+    "NoLagNoLagNoLag\n"
+    "SignalStrongerThanLove\n"
+    "TheLANBeforeTime\n"
+    "YouKnowTheRulesLAN\n"
+    "AndSoDoIPing\n"};
+
+
+  // ==== змінні ====
+  static uint8_t channelIndex = 0;
+  static uint8_t wifi_channel = 1;
+  static uint8_t macAddr[6];
+  static char emptySSID[32];
+  static uint32_t attackTime = 0;
+  static uint32_t packetCounter = 0;
+  static uint32_t packetRateTime = 0;
+  static bool initialized = false;
+
+  // Beacon packet шаблон (109 байт)
+  static uint8_t beaconPacket[109] = {
+    0x80, 0x00, 0x00, 0x00, // Frame Control
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // Destination: broadcast
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, // Source MAC (заповниться)
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, // BSSID (заповниться)
+    0x00, 0x00, // Fragment & sequence number
+    0x83, 0x51, 0xF7, 0x8F, 0x0F, 0x00, 0x00, 0x00, // Timestamp
+    0xE8, 0x03, // Beacon interval (1s)
+    0x31, 0x00, // Capability info (0x31 для WPA2)
+    0x00, 0x20, // Tag: SSID parameter set, length 32
+    // 32 байти SSID (заповниться)
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x01, 0x08, // Tag: Supported Rates, length 8
+    0x82, 0x84, 0x8B, 0x96, 0x24, 0x30, 0x48, 0x6C,
+    0x03, 0x01, 0x01, // DS Parameter set (Channel 1)
+    0x30, 0x18, 0x01, 0x00, 0x00, 0x0F, 0xAC, 0x02,
+    0x02, 0x00, 0x00, 0x0F, 0xAC, 0x04, 0x00, 0x0F,
+    0xAC, 0x04, 0x01, 0x00, 0x00, 0x0F, 0xAC, 0x02,
+    0x00, 0x00
+  };
+
+  if (!initialized) {
+    // Заповнити emptySSID пробілами
+    for (int i = 0; i < 32; i++) emptySSID[i] = ' ';
+    // Ініціалізація WiFi
+    WiFi.mode(WIFI_MODE_STA);
+    esp_wifi_set_channel(channels[0], WIFI_SECOND_CHAN_NONE);
+    // MAC рандом
+    for (int i = 0; i < 6; i++) macAddr[i] = random(256);
+    // WPA2 чи ні
+    beaconPacket[34] = wpa2 ? 0x31 : 0x21;
+    initialized = true;
+    display.setCursor(10, 50);
+    display.println("init end...");
+    display.display();
+  }
+
+while (true) {
+    if (display.getTouch(&tx, &ty)) {if (tx < 20 && ty < 20) return;}
+  uint32_t currentTime = millis();
+  if (currentTime - attackTime > 100) {
+    attackTime = currentTime;
+
+    // Переключення каналу
+    channelIndex++;
+    if (channelIndex >= sizeof(channels)) channelIndex = 0;
+    wifi_channel = channels[channelIndex];
+    esp_wifi_set_channel(wifi_channel, WIFI_SECOND_CHAN_NONE);
+
+    int i = 0;
+    int ssidsLen = strlen_P(ssids);
+    int ssidNum = 1;
+
+    while (i < ssidsLen) {
+      int j = 0;
+      char tmp;
+      do {
+        tmp = pgm_read_byte(ssids + i + j);
+        j++;
+      } while (tmp != '\n' && j <= 32 && (i + j) < ssidsLen);
+
+      uint8_t ssidLen = j - 1;
+      macAddr[5] = ssidNum++;
+      memcpy(&beaconPacket[10], macAddr, 6);
+      memcpy(&beaconPacket[16], macAddr, 6);
+      memcpy(&beaconPacket[38], emptySSID, 32);
+      memcpy_P(&beaconPacket[38], &ssids[i], ssidLen);
+      beaconPacket[82] = wifi_channel;
+
+      if (appendSpaces) {
+        for (int k = 0; k < 3; k++) {
+          packetCounter += esp_wifi_80211_tx(WIFI_IF_STA, beaconPacket, sizeof(beaconPacket), false) == ESP_OK;
+          delay(10);
+        }
+      } else {
+        uint16_t tmpPacketSize = (109 - 32) + ssidLen;
+        uint8_t* tmpPacket = new uint8_t[tmpPacketSize];
+        memcpy(&tmpPacket[0], &beaconPacket[0], 37 + ssidLen);
+        tmpPacket[37] = ssidLen;
+        memcpy(&tmpPacket[38 + ssidLen], &beaconPacket[70], 39);
+        for (int k = 0; k < 3; k++) {
+          packetCounter += esp_wifi_80211_tx(WIFI_IF_STA, tmpPacket, tmpPacketSize, false) == ESP_OK;
+          delay(1);
+        }
+        delete[] tmpPacket;
+      }
+      i += j;
+    }
+  }
+
+  if (currentTime - packetRateTime > 1000) {
+    packetRateTime = currentTime;
+    Serial.printf("Packets/s: %d\n", packetCounter);
+    packetCounter = 0;
+  }
+}
+delay(10);
+}
+//--- end ai code ---
+
+//--- web paint---
+//-- ai code ---
+bool toolIsEraser = false;
+
+void OpenWebPaintApp() {
+  display.setTextColor(TFT_BLACK);
+  display.clear(TFT_WHITE);
+  display.display();
+
+ // WiFi.begin("your_wifi_name", "your_password");  // Заміни на своє
+  unsigned long startAttemptTime = millis();
+  const unsigned long wifiTimeout = 10000; // 10 секунд
+
+  while (WiFi.status() != WL_CONNECTED && WiFi.status() != WIFI_AP) {
+    delay(500);
+    display.print(".");
+
+    // Якщо час очікування вичерпано — запускаємо AP
+    if (millis() - startAttemptTime > wifiTimeout) {
+      WiFi.softAP("PaintDirect", "paint1234"); // Створюємо точку доступу
+      display.println("\nAP mode ON");
+      break;
+    }
+  }
+
+  IPAddress ip = WiFi.localIP();
+  display.clear(TFT_WHITE);
+  display.setCursor(10, 10);
+  display.println("Open in browser:");
+  display.print("http://");
+  display.println(ip);
+
+  // HTML сторінка
+  server.on("/", []() {
+    String html = R"rawliteral(
+<!DOCTYPE html><html><body style='margin:0'>
+<canvas id='c' width='540' height='900' style='touch-action:none; background:#fff'></canvas>
+<div style='position:fixed;top:10px;left:10px'>
+  <button onclick='tool=0'>pen</button>
+  <button onclick='tool=1'>eracer</button>
+  <button onclick='clearAll()'>arabian</button>
+</div>
+<script>
+let c = document.getElementById('c'), ctx = c.getContext('2d');
+let tool = 0;
+c.onpointermove = e => {
+  if (e.buttons) {
+    let r = c.getBoundingClientRect();
+    let x = Math.floor(e.clientX - r.left);
+    let y = Math.floor(e.clientY - r.top);
+    ctx.fillStyle = (tool==0)?"black":"white";
+    ctx.beginPath(); ctx.arc(x,y,4,0,7); ctx.fill();
+    fetch(`/draw?x=${x}&y=${y}&t=${tool}`);
+  }
+};
+function clearAll(){
+  ctx.clearRect(0,0,540,900);
+  fetch('/clear');
+}
+</script></body></html>
+)rawliteral";
+    server.send(200, "text/html", html);
+  });
+
+  // Обробка малювання
+  server.on("/draw", []() {
+    int x = server.arg("x").toInt();
+    int y = server.arg("y").toInt();
+    int t = server.arg("t").toInt();
+    uint16_t color = (t == 1) ? TFT_WHITE : TFT_BLACK;
+    display.fillCircle(x, y, 4, color);
+    display.display();
+    server.send(200, "text/plain", "OK");
+  });
+
+  // Очистка
+  server.on("/clear", []() {
+    display.clear(TFT_WHITE);
+    display.display();
+    server.send(200, "text/plain", "Cleared");
+  });
+
+  server.begin();
+
+  // Малювання з M5Paper
+  lgfx::touch_point_t tp[5];
+  while (true) {
+    server.handleClient();
+
+    // Дотик на екрані
+    int num = display.getTouchRaw(tp, 5);
+    if (num > 0) {
+      display.convertRawXY(tp, num);
+      for (int i = 0; i < num; i++) {
+        int x = tp[i].x;
+        int y = tp[i].y;
+
+        // Якщо у верхньому лівому куті — очистити
+        if (x > 50 && y < 20) {
+          display.clear(TFT_WHITE);
+          display.display();
+          HTTPClient http;
+          http.begin("http://" + ip.toString() + "/clear");
+          http.GET();
+          http.end();
+        }
+        if(x < 20 && y < 20){return;}
+
+        uint16_t color = toolIsEraser ? TFT_WHITE : TFT_BLACK;
+        display.fillCircle(x, y, 4, color);
+        display.display();
+
+        // Надіслати до сервера (для всіх інших)
+        HTTPClient http;
+        String url = "http://" + ip.toString() + "/draw?x=" + x + "&y=" + y + "&t=" + (toolIsEraser ? 1 : 0);
+        http.begin(url);
+        http.GET();
+        http.end();
+        delay(10);
+      }
+    }
+
+    // Кнопка для перемикання інструменту (в майбутньому можна зробити)
+    // Наприклад: кнопка A → перемикає інструмент
+  }
+}
+//--- end ai code ---
 
 
 //--- browser ---
@@ -6685,7 +7086,7 @@ void openSimpleBrowser(M5GFX &display) {
           display.drawRoundRect(6, y - 4 - scroll, 520, lineHeight + 4, 4, TFT_LIGHTGREY);
           display.setCursor(12, y + 1 - scroll);
         }
-        
+
 
         String line = content;
         int maxWidth = 500;
@@ -6946,6 +7347,10 @@ void openSettings() {
         WiFi.softAP("Wemos", "wemos1234");
         wifi_mode = 3;
       }
+      if (x >= 20 && x <= 460 && y >= 420 && y <= 470) {
+        wpurl = showSimpleKeyboard(display);
+        WallpaperURL = wpurl.c_str();
+      }
 
       if (y >= pianoY && y <= pianoY + pianoHeight && x >= pianoX && x <= pianoX + pianoWidth) {
         int keyIndex = (x - pianoX) / keyWidth;
@@ -6981,15 +7386,17 @@ void openSettings() {
     // Кнопка 1 (WiFi.disconnect)
     display.drawRect(20, 340, 153, 50, TFT_BLACK);
     display.drawString("Disconnect", 20 + 153 / 2, 340 + 35);
-
     // Кнопка 2 (WIFI_OFF)
     display.drawRect(179, 340, 153, 50, TFT_BLACK);
     display.drawString("WIFI OFF", 179 + 153 / 2, 340 + 35);
-
     // Кнопка 3 (AP mode)
     display.drawRect(338, 340, 153, 50, TFT_BLACK);
     display.drawString("AP mode", 338 + 153 / 2, 340 + 35);
-
+    //--- lockscreen wallpaper ---
+    display.drawString("wallpaper", 100, 420);
+    display.fillRect(20, 420, 490, 50, TFT_WHITE);
+    display.drawRect(20, 420, 490, 50, TFT_BLACK);
+    display.drawString(String(WallpaperURL), 230, 457);
 
 
     display.display();
@@ -7116,7 +7523,7 @@ skipRedraw:;
 void setup() {
   display.init();
   display.setFont(&fonts::Font4);
-
+  Serial.begin(115200);
   if (!display.touch()) {
     display.setTextDatum(textdatum_t::middle_center);
     display.drawString("Touch not found.", display.width() / 2, display.height() / 2);
