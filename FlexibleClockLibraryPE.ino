@@ -26,14 +26,14 @@ const char* WallpaperURL = "http://127.0.0.1:8000/image.jpg"; //example: "http:/
 
 
 M5GFX display;
-String FCLver = "v1.1s6 m5paper";
+String FCLver = "v1.1s7 m5paper";
 
 int tx, ty;
 int x, y;
-String password = ""; //your unlock pass
+String password = "";
 
 
-byte batteryStatus = true;
+byte batteryStatus = false;
 char wifi_mode = 0;
 #define BAT_ADC_PIN 3  // GPIO3 (пін G3)
 #define BUZZER_PIN 21
@@ -6405,6 +6405,11 @@ void drawJPGfromURL(const char* url, int x, int y) {
 }
 //--- end AI code 60% ---
 
+struct Card {
+  String rank;
+  String suit;
+  int value;
+};
 
 // ----------------- Тип кнопки ------------------
 typedef void (*ButtonCallback)();
@@ -6439,7 +6444,7 @@ Button buttons[] = {
   {412, 50, 100, 100, "Files", item_bitmap_files, openNotesApp},
   {28,  178, 100, 100, "Clock", item_bitmap_clock,  openWiFiApp},
   {156, 178, 100, 100, "browser", item_bitmap_browser, openBrowserApp},
-  {284, 178, 100, 100, "Games", item_bitmap_game, OpenWebPaintApp},
+  {284, 178, 100, 100, "Games", item_bitmap_game, OpenGames},
   {412, 178, 100, 100, "dev tool", item_bitmap_settings, openSettings},
 };
 const int BUTTON_COUNT = sizeof(buttons) / sizeof(buttons[0]);
@@ -6503,7 +6508,7 @@ void taskbar() { //----opti----
   }
   //---battery-status---
   int percent;
-  float minVolt = 3.1;
+  float minVolt = 3.2;
   float maxVolt = 4.2;
   int adc_val = analogRead(BAT_ADC_PIN);
   float voltage = (adc_val / 4095.0) * 3.6;
@@ -6581,7 +6586,9 @@ void LockApp(byte callKeyboard) {
 
   delay(500);
   if (callKeyboard) {
+    display.drawString("Tap to call keyboard", display.width() / 2, display.height() / 2);
     pswd = showSimpleKeyboard(display);
+    
     if (pswd != password) {
       pswd = showSimpleKeyboard(display);  // Друга спроба
       if (pswd != password) {
@@ -6613,6 +6620,7 @@ void openTERMINALApp(){
     String cmd = showSimpleKeyboard(display);
     if(cmd == "/beacon"){wifi_beacon_flooder();}
     if(cmd == "/paint"){openPaintApp();}
+    if(cmd == "/bj21"){Blackjack21();}
     if(cmd == "q")return;
     if(cmd == "")return;
     }
@@ -6790,6 +6798,34 @@ while (true) {
 delay(10);
 }
 //--- end ai code ---
+//--- open games ---
+void OpenGames(){
+  display.setTextColor(TFT_BLACK);
+  display.clear(TFT_WHITE);
+  display.display();
+ while(true){
+  String games[] = {">  Web Paint", ">  BlackJack21", "null", "null", "null"};
+  int gameCount = sizeof(games) / sizeof(games[0]);
+
+  int y = 30;
+  for(int i=0;i<gameCount;i++){
+    display.setCursor(20,y);
+    display.println(games[i]);
+    y+=30;
+  }
+  display.drawLine(20, 30, 500, 30, TFT_BLACK);
+  display.drawLine(20, 60, 500, 60, TFT_BLACK);
+  display.drawLine(20, 90, 500, 90, TFT_BLACK);
+
+
+  if (display.getTouch(&tx, &ty)) {
+          if (tx < 20 && ty < 20) return;
+          if (ty > 0 && ty < 30) OpenWebPaintApp();
+          if (ty > 30 && ty < 60){ display.clear(TFT_WHITE); Blackjack21();}
+  }
+}
+}
+
 
 //--- web paint---
 //-- ai code ---
@@ -7180,7 +7216,181 @@ reload:
 //--- end ai code 98% ---
 
 
+//========blackjack21==========
+//--- ai code ---
+int balance=1000;
+void Blackjack21() {
+  struct Card { String rank; String suit; int value; };
 
+  // колода
+  const char* SUITS[4] = {"@","#","+","="};//{"♥","♦","♣","♠"}
+  const char* RANKS[13] = {"A","2","3","4","5","6","7","8","9","10","J","Q","K"};
+  int VALUES[13] = {11,2,3,4,5,6,7,8,9,10,10,10,10};
+
+  Card player[12], dealer[12];
+  int pCount=0, dCount=0, bet=50;
+  bool playing=true, reveal=false;
+
+  auto drawCard = [&]( ) {
+    Card c;
+    int s = random(0,4), r=random(0,13);
+    c.rank=RANKS[r]; c.suit=SUITS[s]; c.value=VALUES[r];
+    return c;
+  };
+
+  auto handValue = [&](Card* h,int n){
+    int sum=0, aces=0;
+    for(int i=0;i<n;i++){ sum+=h[i].value; if(h[i].rank=="A") aces++; }
+    while(sum>21 && aces>0){ sum-=10; aces--; }
+    return sum;
+  };
+
+  auto drawTable = [&](){
+    display.fillScreen(TFT_WHITE);
+    display.fillRect(20,60,440,260,TFT_DARKGREEN);   // стіл
+    //display.setTextSize(2);
+    display.setCursor(10,30); display.printf("Balance: %d", balance);
+    display.setCursor(250,30); display.printf("Bet: %d", bet);
+  };
+
+  auto drawCardAnim = [&](int x,int y,Card c,uint16_t col){
+    for(int i=0;i<=y;i+=20){
+      display.fillRect(x,i,50,70,col);
+      display.drawRect(x,i,50,70,TFT_BLACK);
+      display.setCursor(x+5,i+5);
+      //display.setTextSize(2);
+      display.print(c.rank);
+      delay(15);
+      if(i<y) display.fillRect(x,i,50,70,TFT_DARKGREEN); // стираємо "шлях"
+    }
+  };
+
+  auto drawHands = [&](){
+    // Dealer
+    for(int i=0;i<dCount;i++){
+      if(i==0 && !reveal){
+        display.fillRect(60+i*60,80,50,70,TFT_BLUE);
+        display.drawRect(60+i*60,80,50,70,TFT_WHITE);
+        display.setCursor(70+i*60,110); display.print("??");
+      } else {
+        display.fillRect(60+i*60,80,50,70,TFT_RED);
+        display.drawRect(60+i*60,80,50,70,TFT_WHITE);
+        display.setCursor(65+i*60,90);
+        display.print(dealer[i].rank+dealer[i].suit);
+      }
+    }
+    // Player
+    for(int i=0;i<pCount;i++){
+      display.fillRect(60+i*60,200,50,70,TFT_RED);
+      display.drawRect(60+i*60,200,50,70,TFT_WHITE);
+      display.setCursor(65+i*60,210);
+      display.print(player[i].rank+player[i].suit);
+    }
+    display.setCursor(350,150);
+    display.printf("You: %d", handValue(player,pCount));
+    if(reveal){
+      display.setCursor(350,50);
+      display.printf("Dealer: %d", handValue(dealer,dCount));
+    }
+  };
+
+  // --- Start ---
+  // display.begin();
+  display.setRotation(0);
+  randomSeed(millis());
+  drawTable();
+
+  // Роздача
+  player[pCount++] = drawCard();
+  dealer[dCount++] = drawCard();
+  player[pCount++] = drawCard();
+  dealer[dCount++] = drawCard();
+  drawHands();
+
+  // --- Геймплей ---
+  while(playing){
+    // прості кнопки по тач-зоні
+    display.setCursor(30,350); display.print("[Hit]");
+    display.setCursor(150,350); display.print("[Stand]");
+    display.setCursor(300,350); display.print("[Double]");
+
+    // чек дотика
+    uint16_t tx,ty; if(display.getTouch(&tx,&ty)){
+      if (tx < 20 && ty < 20) return;
+      if(ty>340 && ty<390){
+        if(tx<120){ // HIT
+          player[pCount++] = drawCard();
+          drawTable(); drawHands();
+          if(handValue(player,pCount)>21){ playing=false; balance-=bet; }
+        } else if(tx<250){ // STAND
+          reveal=true;
+          while(handValue(dealer,dCount)<17){
+            dealer[dCount++] = drawCard();
+            drawTable(); drawHands();
+            delay(500);
+          }
+          int pv=handValue(player,pCount), dv=handValue(dealer,dCount);
+          if(dv>21 || pv>dv) balance+=bet;
+          else if(pv<dv) balance-=bet;
+          playing=false;
+        } else { // DOUBLE
+          if(balance>=bet){
+            balance-=bet; bet*=2;
+            player[pCount++] = drawCard();
+            drawTable(); drawHands();
+            reveal=true;
+            while(handValue(dealer,dCount)<17){
+              dealer[dCount++] = drawCard();
+              drawTable(); drawHands();
+              delay(500);
+            }
+            int pv=handValue(player,pCount), dv=handValue(dealer,dCount);
+            if(dv>21 || pv>dv) balance+=bet;
+            else if(pv<dv) balance-=bet;
+          }
+          playing=false;
+        }
+      }
+    }
+  }
+
+  // --- Результат ---
+  drawTable();
+  reveal=true;
+  drawHands();
+  display.setCursor(120,300);
+  if(handValue(player,pCount)>21) display.print("You BUST!");
+  else {
+    int pv=handValue(player,pCount), dv=handValue(dealer,dCount);
+    if(pv>dv || dv>21) display.print("You WIN!");
+    else if(pv==dv) display.print("PUSH!");
+    else display.print("You LOSE!");
+  }
+
+  // Кнопка "New Game"
+display.fillRect(150,370,140,40,TFT_BLUE);
+display.drawRect(150,370,140,40,TFT_WHITE);
+display.setCursor(170,380);
+display.setTextSize(1);
+display.print("New Game");
+
+// чекаємо тач
+bool waiting=true;
+while(waiting){
+  uint16_t tx,ty;
+  if(display.getTouch(&tx,&ty)){
+    if(tx>150 && tx<290 && ty>370 && ty<410){
+      waiting=false;
+      // рекурсивно викликаємо Blackjack21() ще раз
+      Blackjack21();
+    }
+  }
+  delay(50);
+}
+}
+
+
+//--- end ai code ---
 
 
 
