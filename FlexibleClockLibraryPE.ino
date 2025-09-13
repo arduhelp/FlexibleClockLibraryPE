@@ -19,14 +19,14 @@ extern "C" {
 
 WebServer server(80);
 HTTPClient http;
-byte httpsProxy = true;
+byte httpsProxy = false;
 String httpsProxyURL = "http://127.0.0.1:8080/fetch/"; //example: "http://127.0.0.1:8080/fetch/"
 String wpurl = ""; //---v---
 const char* WallpaperURL = "http://127.0.0.1:8000/image.jpg"; //example: "http://127.0.0.1:8080/image,jpg"
 
 
 M5GFX display;
-String FCLver = "v1.1s7 m5paper";
+String FCLver = "v1.1s8 m5paper";
 
 int tx, ty;
 int x, y;
@@ -9102,8 +9102,8 @@ void OpenGames(){
   display.setTextColor(TFT_BLACK);
   display.clear(TFT_WHITE);
   display.display();
- while(true){
-  String games[] = {">  Web Paint", ">  BlackJack21", "null", "null", "null"};
+
+  String games[] = {">  Web Paint", ">  BlackJack21", ">  Checkers", "null", "null"};
   int gameCount = sizeof(games) / sizeof(games[0]);
 
   int y = 30;
@@ -9112,15 +9112,19 @@ void OpenGames(){
     display.println(games[i]);
     y+=30;
   }
+  
   display.drawLine(20, 30, 500, 30, TFT_BLACK);
   display.drawLine(20, 60, 500, 60, TFT_BLACK);
   display.drawLine(20, 90, 500, 90, TFT_BLACK);
-
+  while(true){
 
   if (display.getTouch(&tx, &ty)) {
+     display.fillCircle(tx, ty, 5, TFT_BLACK);
           if (tx < 20 && ty < 20) return;
           if (ty > 0 && ty < 30) OpenWebPaintApp();
           if (ty > 30 && ty < 60){ display.fillRect(0, 0, display.width(), display.height(), TFT_WHITE); startBlackJack();}
+          if (ty > 60 && ty < 90){ display.fillRect(0, 0, display.width(), display.height(), TFT_WHITE); CheckersGame();}
+         
   }
 }
 }
@@ -9513,11 +9517,135 @@ reload:
 
 
 //--- end ai code 98% ---
+//--- ai code ---
+// Autonomous Checkers for 2 players
+// Target: M5Paper S3, m5gfx (без m5unified)
+// Викликати CheckersGame(display);
+//--- shashki ---
 
+// Autonomous Checkers for 2 players
+// Target: M5Paper S3, m5gfx (без m5unified)
+// Викликати CheckersGame(display);
+
+void CheckersGame() {
+  const int N=8;
+  const int CELL=62, X0=20, Y0=40;
+  int board[N][N];
+  int turn=1; // 1=Red, 2=Black
+  int selX=-1, selY=-1;
+
+  // малюємо одну клітинку
+  auto drawCell=[&](int x, int y){
+    int sx=X0+x*CELL, sy=Y0+y*CELL;
+    uint16_t col=((x+y)%2==0)?TFT_LIGHTGREY:TFT_DARKGREY;
+    display.fillRect(sx,sy,CELL,CELL,col);
+    display.drawRect(sx,sy,CELL,CELL,TFT_BLACK);
+
+    // рамка вибору
+    if(x==selX && y==selY){
+      display.drawRect(sx+2,sy+2,CELL-4,CELL-4,TFT_DARKGREEN);
+    }
+
+    // фішка
+    int v=board[y][x];
+    if(v){
+      uint16_t c=(v==1||v==3)?TFT_DARKGREEN:TFT_BLACK;
+      display.fillCircle(sx+CELL/2,sy+CELL/2,CELL/2-6,c);
+      display.drawCircle(sx+CELL/2,sy+CELL/2,CELL/2-6,TFT_WHITE);
+      if(v>2){
+        display.setCursor(sx+CELL/2-6,sy+CELL/2-6);
+        display.print("K");
+      }
+    }
+  };
+
+  // малюємо лише текст "чий хід"
+  auto redrawTurn=[&](){
+    display.fillRect(0,0,200,30,TFT_WHITE);
+    display.setCursor(10,30);
+    display.setTextSize(1);
+    display.printf("Turn: %s", turn==1?"WHITE":"BLACK");
+  };
+
+  auto inBounds=[&](int x,int y){return x>=0&&x<N&&y>=0&&y<N;};
+
+  // ініціалізація
+  for(int y=0;y<N;y++)for(int x=0;x<N;x++)board[y][x]=0;
+  for(int y=0;y<3;y++)for(int x=0;x<N;x++)if((x+y)%2)board[y][x]=1;
+  for(int y=N-3;y<N;y++)for(int x=0;x<N;x++)if((x+y)%2)board[y][x]=2;
+
+  // повна початкова отрисовка
+  display.fillRect(0,0,display.width(),570,TFT_WHITE);
+  redrawTurn();
+  for(int y=0;y<N;y++)for(int x=0;x<N;x++)drawCell(x,y);
+
+  // головний цикл гри
+  bool runninge=true;
+  while(runninge){
+    uint16_t tx,ty;
+    if(display.getTouch(&tx,&ty)){
+      if(tx<20&&ty<20){ runninge=false; break; } // exit
+      if(tx<X0||ty<Y0||tx>=X0+N*CELL||ty>=Y0+N*CELL){
+        // зняти виділення
+        int oldX=selX, oldY=selY;
+        selX=selY=-1;
+        if(inBounds(oldX,oldY)) drawCell(oldX,oldY);
+        continue;
+      }
+
+      int cx=(tx-X0)/CELL, cy=(ty-Y0)/CELL;
+
+      if(selX==-1){
+        int v=board[cy][cx];
+        if(v && ((turn==1&&(v==1||v==3))||(turn==2&&(v==2||v==4)))){
+          selX=cx; selY=cy;
+          drawCell(selX,selY);
+        }
+      }else{
+        int v=board[selY][selX];
+        int dx=cx-selX, dy=cy-selY;
+        int dir=(v==1||v==3)?1:-1;
+        bool king=(v>2), moved=false;
+
+        if(abs(dx)==1&&((king&&abs(dy)==1)||(dy==dir))&&board[cy][cx]==0){
+          board[cy][cx]=v; board[selY][selX]=0; moved=true;
+        }
+        if(abs(dx)==2&&abs(dy)==2){
+          int mx=(selX+cx)/2,my=(selY+cy)/2;
+          int mid=board[my][mx];
+          if(mid && ((turn==1&&(mid==2||mid==4))||(turn==2&&(mid==1||mid==3)))){
+            if(king||(dy/2==dir)){
+              board[cy][cx]=v; board[selY][selX]=0; board[my][mx]=0; moved=true;
+              drawCell(mx,my);
+            }
+          }
+        }
+
+        if(moved){
+          if(v==1&&cy==N-1)board[cy][cx]=3;
+          if(v==2&&cy==0)board[cy][cx]=4;
+
+          drawCell(selX,selY);   // стерли старе місце
+          drawCell(cx,cy);       // нове місце
+          turn=(turn==1)?2:1;
+          redrawTurn();
+        } else {
+          drawCell(selX,selY);   // відмінити виділення
+        }
+        selX=selY=-1;
+      }
+    }
+    delay(50);
+  }
+}
+
+
+
+//--- end ai code ---
 
 //========blackjack21==========
 //--- ai code ---
-int balance=1000;
+int balance=100;
 void startBlackJack(){
     display.setTextSize(2);
     display.setCursor(20,90); display.printf("Black Jack 21");
