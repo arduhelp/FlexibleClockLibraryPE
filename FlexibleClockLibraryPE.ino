@@ -8729,11 +8729,15 @@ void openNotesApp();
 void openSettings();
 void openBrowserApp();
 void openSimpleBrowser(M5GFX &display);
+String showSimpleKeyboard(M5GFX &display);
 void drawAppBox(const Button& btn);
 void drawButtons(Button* btns, int count);
 void handleTouch(Button* btns, int count);
 void taskbar();
 void connectWiFiUI(M5GFX &display);
+void OpenGames();
+void Blackjack21();
+void startBlackJack();
 
 // ------------------ Масив кнопок --------------------
 Button buttons[] = {
@@ -8920,6 +8924,8 @@ void openTERMINALApp(){
     if(cmd == "/beacon"){wifi_beacon_flooder();}
     if(cmd == "/paint"){openPaintApp();}
     if(cmd == "/bj21"){Blackjack21();}
+    if(cmd == "/tt"){TouchTest();}
+    if(cmd == "/ta"){TestAnimation();}
     if(cmd == "q")return;
     if(cmd == "")return;
     }
@@ -8931,7 +8937,7 @@ void openTERMINALApp(){
 
 
 
-//--- ai code ---
+//--- ai code 30% ---
 // ==================== 2. BEACON FLOOD ====================
 void wifi_beacon_flooder() {
   display.clear(TFT_WHITE);
@@ -9096,7 +9102,7 @@ while (true) {
 }
 delay(10);
 }
-//--- end ai code ---
+//--- end ai code 30% ---
 //--- open games ---
 void OpenGames(){
   display.setTextColor(TFT_BLACK);
@@ -9538,12 +9544,14 @@ void CheckersGame() {
   auto drawCell=[&](int x, int y){
     int sx=X0+x*CELL, sy=Y0+y*CELL;
     uint16_t col=((x+y)%2==0)?TFT_LIGHTGREY:TFT_DARKGREY;
+    display.fillRect(sx,sy,CELL,CELL,TFT_WHITE);
+    delay(100);
     display.fillRect(sx,sy,CELL,CELL,col);
     display.drawRect(sx,sy,CELL,CELL,TFT_BLACK);
 
     // рамка вибору
     if(x==selX && y==selY){
-      display.drawRect(sx+2,sy+2,CELL-4,CELL-4,TFT_DARKGREEN);
+      display.drawRect(sx+2,sy+2,CELL-4,CELL-4,TFT_RED);
     }
 
     // фішка
@@ -9600,6 +9608,7 @@ void CheckersGame() {
         if(v && ((turn==1&&(v==1||v==3))||(turn==2&&(v==2||v==4)))){
           selX=cx; selY=cy;
           drawCell(selX,selY);
+          drawCell(selX,selY);
         }
       }else{
         int v=board[selY][selX];
@@ -9624,13 +9633,15 @@ void CheckersGame() {
         if(moved){
           if(v==1&&cy==N-1)board[cy][cx]=3;
           if(v==2&&cy==0)board[cy][cx]=4;
-
-          drawCell(selX,selY);   // стерли старе місце
+          
+          //drawCell(selX,selY);
+          drawCell(selX,selY);// стерли старе місце
           drawCell(cx,cy);       // нове місце
           turn=(turn==1)?2:1;
           redrawTurn();
         } else {
-          drawCell(selX,selY);   // відмінити виділення
+          //drawCell(selX,selY);
+          drawCell(selX,selY);// відмінити виділення
         }
         selX=selY=-1;
       }
@@ -9642,10 +9653,102 @@ void CheckersGame() {
 
 
 //--- end ai code ---
+//========TEST MENU===========
+//--- ai code ---
+void TouchTest() {
+  display.fillScreen(TFT_WHITE);
+  display.setCursor(10,20);
+  //display.setTextSize(1);
+  display.println("Tap anywhere... (exit: top-left)");
+
+  bool runninge=true;
+  while(runninge){
+    uint16_t x,y;
+    if(display.getTouch(&x,&y)){
+      // вихід
+      if(x<20 && y<20){ runninge=false; break; }
+
+      // показати координати
+      display.fillRect(0,0,200,60,TFT_WHITE);
+      display.setCursor(10,30);
+      display.printf("X=%d Y=%d",x,y);
+
+      // ефект «кола по воді»
+      for(int r=5;r<60;r+=5){
+        display.drawCircle(x,y,r,TFT_BLACK);
+        delay(30);
+        display.drawCircle(x,y,r,TFT_WHITE); // стираємо, щоб не засмічувати
+
+      }
+    }
+    delay(30);
+  }
+}
+
+
+void TestAnimation() {
+  const int STAR_COUNT = 40;
+  struct Star { float x,y,z; };
+  Star stars[STAR_COUNT];
+
+  // ініціалізація зірок
+  for(int i=0;i<STAR_COUNT;i++){
+    stars[i].x = random(-100,100);
+    stars[i].y = random(-100,100);
+    stars[i].z = random(20,100);
+  }
+
+  display.fillScreen(TFT_BLACK);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
+  display.setCursor(10,20);
+  display.println("Animation Test");
+  display.setTextSize(1);
+  display.println("Cosmic flight demo...");
+  delay(1000);
+
+  bool runninge=true;
+  while(runninge){
+    display.fillRect(0,60,display.width(),display.height()-60,TFT_BLACK);
+
+    for(int i=0;i<STAR_COUNT;i++){
+      // рух вперед
+      stars[i].z -= 1;
+      if(stars[i].z <= 1){
+        stars[i].x = random(-100,100);
+        stars[i].y = random(-100,100);
+        stars[i].z = 100;
+      }
+
+      // проекція у 2D
+      int sx = (int)(stars[i].x*200/stars[i].z) + display.width()/2;
+      int sy = (int)(stars[i].y*200/stars[i].z) + display.height()/2;
+
+      if(sx>=0 && sx<display.width() && sy>=0 && sy<display.height()){
+        int size = max(1,(int)(5 - stars[i].z/20));
+        display.fillCircle(sx,sy,size,TFT_WHITE);
+      }
+    }
+
+    // підпис з підказкою виходу
+    display.setCursor(10,40);
+    display.setTextColor(TFT_WHITE,TFT_BLACK);
+    display.print("Exit: tap top-left");
+
+    uint16_t tx,ty;
+    if(display.getTouch(&tx,&ty)){
+      if(tx<20 && ty<20){ runninge=false; break; }
+    }
+
+    delay(20);
+  }
+}
+
+//--- end ai code ---
+
 
 //========blackjack21==========
-//--- ai code ---
-int balance=100;
+//--- ai code 83% ---
+int balance=100 , bet=50;
 void startBlackJack(){
     display.setTextSize(2);
     display.setCursor(20,90); display.printf("Black Jack 21");
@@ -9653,9 +9756,12 @@ void startBlackJack(){
     display.drawLine(20, 100, 500, 100, TFT_BLACK);
     display.drawLine(20, 130, 500, 130, TFT_BLACK);
     display.drawLine(20, 160, 500, 160, TFT_BLACK);
+    display.drawLine(20, 190, 500, 190, TFT_BLACK);
     
     display.setCursor(20,130); display.printf("rules");
     display.setCursor(20,160); display.printf("play");
+    display.setCursor(40,190); display.printf("-10$");
+    display.setCursor(400,190); display.printf("+10$");
     
   while(true){
     delay(10);
@@ -9663,6 +9769,10 @@ void startBlackJack(){
           if (tx < 20 && ty < 20) return;
           if (ty > 100 && ty < 130) display.drawXBitmap(0, 200, qrcodebj21_rules, 540, 540, TFT_BLACK);
           if (ty > 130 && ty < 160){ display.fillRect(0, 0, display.width(), display.height(), TFT_WHITE); Blackjack21();}
+          if (ty > 160 && ty < 190 && tx > 20 && tx < 270){bet -= 10; delay(100);}
+          if (ty > 160 && ty < 190 && tx > 270 && tx < 520){bet += 10; delay(100);}
+          display.fillRect(20,0,440,25,TFT_WHITE);
+          display.setCursor(250,30); display.printf("Bet: %d", bet);
   }
     }
   }
@@ -9678,7 +9788,7 @@ void Blackjack21() {
   int VALUES[13] = {11,2,3,4,5,6,7,8,9,10,10,10,10};
 
   Card player[12], dealer[12];
-  int pCount=0, dCount=0, bet=50;
+  int pCount=0, dCount=0;
   bool playing=true, reveal=false;
 
   auto drawCard = [&]( ) {
@@ -9845,7 +9955,7 @@ while(waiting){
 }
 
 
-//--- end ai code ---
+//--- end ai code 83% ---
 
 
 
