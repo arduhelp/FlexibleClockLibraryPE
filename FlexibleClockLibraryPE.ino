@@ -8738,6 +8738,11 @@ void connectWiFiUI(M5GFX &display);
 void OpenGames();
 void Blackjack21();
 void startBlackJack();
+void TouchTest();
+void TestAnimation();
+void eDoska();
+void CheckersGame();
+
 
 // ------------------ Масив кнопок --------------------
 Button buttons[] = {
@@ -8917,7 +8922,8 @@ void LockApp(byte callKeyboard) {
 
 }
 
-//--- terminal ---
+//----- terminal -----//
+//--- TERMINALApp0 ---//
 void openTERMINALApp(){
   while (true){
     String cmd = showSimpleKeyboard(display);
@@ -8926,6 +8932,7 @@ void openTERMINALApp(){
     if(cmd == "/bj21"){Blackjack21();}
     if(cmd == "/tt"){TouchTest();}
     if(cmd == "/ta"){TestAnimation();}
+    if(cmd == "/ed"){eBoard();}
     if(cmd == "q")return;
     if(cmd == "")return;
     }
@@ -9172,7 +9179,7 @@ void OpenWebPaintApp() {
   server.on("/", []() {
     String html = R"rawliteral(
 <!DOCTYPE html><html><body style='margin:0'>
-<canvas id='c' width='540' height='900' style='touch-action:none; background:#fff'></canvas>
+<canvas id='c' width='540' height='900' style='touch-action:none; background:#fff; border: 1px solid black;'></canvas>
 <div style='position:fixed;top:10px;left:10px'>
   <button onclick='tool=0'>pen</button>
   <button onclick='tool=1'>eracer</button>
@@ -9262,8 +9269,91 @@ function clearAll(){
     // Наприклад: кнопка A → перемикає інструмент
   }
 }
-//--- end ai code ---
+//--- end ai code 30%---
+//--- ai code ---
+// тимчасовий буфер під файл
+static uint8_t *fileBuf = nullptr;
+static size_t fileSize = 0;
+static size_t fileCap = 0;
+static bool isPNG = false;
 
+void eBoard() {
+  display.begin();
+  display.setRotation(0);
+  display.fillScreen(TFT_BLACK);
+
+  // --- Wi-Fi ---
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("M5PaperViewer", "12345678");
+
+  // --- HTML сторінка ---
+  const char* htmlForm = R"rawliteral(
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="UTF-8"><title>M5Paper Image Upload</title></head>
+    <body>
+      <h2>Upload JPG or PNG</h2>
+      <form method="POST" action="/upload" enctype="multipart/form-data">
+        <input type="file" name="image">
+        <input type="submit" value="Upload">
+      </form>
+    </body>
+    </html>
+  )rawliteral";
+
+  server.on("/", HTTP_GET, [&]() {
+    server.send(200, "text/html", htmlForm);
+  });
+
+  // --- Обробка завантаження ---
+  server.on("/upload", HTTP_POST, [&]() {
+    server.send(200, "text/html", "<h3>Upload complete!</h3><a href='/'>Back</a>");
+  }, [&]() {
+    HTTPUpload &upload = server.upload();
+
+    if (upload.status == UPLOAD_FILE_START) {
+      if (fileBuf) { free(fileBuf); fileBuf = nullptr; }
+      fileSize = 0;
+      fileCap = 1024;
+      fileBuf = (uint8_t*)malloc(fileCap);
+
+      String fn = upload.filename;
+      isPNG = fn.endsWith(".png") || fn.endsWith(".PNG");
+      display.fillScreen(TFT_BLACK);
+    } 
+    else if (upload.status == UPLOAD_FILE_WRITE) {
+      // розширення буфера
+      if (fileSize + upload.currentSize > fileCap) {
+        fileCap = (fileSize + upload.currentSize) * 2;
+        fileBuf = (uint8_t*)realloc(fileBuf, fileCap);
+      }
+      memcpy(fileBuf + fileSize, upload.buf, upload.currentSize);
+      fileSize += upload.currentSize;
+    } 
+    else if (upload.status == UPLOAD_FILE_END) {
+      if (fileBuf && fileSize > 0) {
+        if (isPNG) {
+          display.drawPng(fileBuf, fileSize, 0, 0, 540, 950);
+        } else {
+          display.drawJpg(fileBuf, fileSize, 0, 0, 540, 950);
+        }
+      }
+    }
+  });
+
+  server.begin();
+
+  // --- Основний цикл ---
+  while (true) {
+    server.handleClient();
+    delay(1);
+    if (display.getTouch(&tx, &ty)) {
+          if (tx < 20 && ty < 20) return;}
+  }
+}
+
+
+//--- end ai code
 
 //--- browser ---
 //--- ai code 98% ---
