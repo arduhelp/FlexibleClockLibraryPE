@@ -8740,9 +8740,10 @@ void Blackjack21();
 void startBlackJack();
 void TouchTest();
 void TestAnimation();
-void eDoska();
+void eBoard();
 void CheckersGame();
-
+void generateWorld(int seed, int width, int height);
+void drawPixele(int x, int y, uint16_t color);
 
 // ------------------ Масив кнопок --------------------
 Button buttons[] = {
@@ -8933,6 +8934,7 @@ void openTERMINALApp(){
     if(cmd == "/tt"){TouchTest();}
     if(cmd == "/ta"){TestAnimation();}
     if(cmd == "/ed"){eBoard();}
+    if(cmd == "/gw"){mainGame(123456);}
     if(cmd == "q")return;
     if(cmd == "")return;
     }
@@ -9270,6 +9272,267 @@ function clearAll(){
   }
 }
 //--- end ai code 30%---
+
+
+
+
+
+
+
+
+
+//==============genworld=============
+
+
+
+
+//--- ai code ---
+// === Генерація світу по сіду, 960x540 ===
+// Викликати просто: generateWorld(123456);
+
+#define BLOCK_SIZE 15
+#define SCREEN_W 960
+#define SCREEN_H 540
+#define INV_SLOTS 5
+
+enum TileType {T_WATER, T_GRASS, T_MOUNTAIN, T_TREE, T_IRON};
+
+// ---- масиви для карти ----
+TileType tiles[SCREEN_W/BLOCK_SIZE][SCREEN_H/BLOCK_SIZE];
+uint16_t mapColors[SCREEN_W/BLOCK_SIZE][SCREEN_H/BLOCK_SIZE];
+
+// ---- позиція гравця ----
+int playerX=0, playerY=0;
+float playerFX=0, playerFY=0;
+int targetX=0, targetY=0;
+
+// ---- інвентар ----
+uint8_t inventory[INV_SLOTS]; // 0: дерево, 1: залізо, решта поки порожні
+
+int gridW() { return SCREEN_W/BLOCK_SIZE; }
+int gridH() { return SCREEN_H/BLOCK_SIZE; }
+
+// --- малювання одного блоку ---
+void drawBlock(int gx,int gy){
+  // спочатку білий слід
+  display.fillRect(gx*BLOCK_SIZE, gy*BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE, 0xFFFF);
+  delay(9);
+  // потім відновлюємо колір карти
+  display.fillRect(gx*BLOCK_SIZE, gy*BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE, mapColors[gx][gy]);
+}
+
+// --- малювання гравця ---
+int prevPlayerX = -1;
+int prevPlayerY = -1;
+
+void drawPlayer() {
+    // перевіряємо, чи змінилася позиція гравця
+    if(prevPlayerX != playerX || prevPlayerY != playerY) {
+        // очищаємо стару позицію та сусідні блоки
+        for(int dx=-1; dx<=1; dx++) {
+            for(int dy=-1; dy<=1; dy++) {
+                int gx = prevPlayerX + dx;
+                int gy = prevPlayerY + dy;
+                if(gx>=0 && gy>=0 && gx<gridW() && gy<gridH()) {
+                    display.fillRect(gx*BLOCK_SIZE, gy*BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE, mapColors[gx][gy]);
+                }
+            }
+        }
+        // зберігаємо нову попередню позицію
+        prevPlayerX = playerX;
+        prevPlayerY = playerY;
+    }
+
+    // малюємо гравця
+    display.fillRect(playerX*BLOCK_SIZE, playerY*BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE, 0xF800);
+}
+
+// --- генерація карти ---
+void generateWorld(int seed){
+  display.setRotation(1);
+  auto fade=[](float t){return t*t*t*(t*(t*6-15)+10);};
+  auto lerp=[](float a,float b,float t){return a+t*(b-a);};
+  auto grad=[](int hash,float x,float y){switch(hash&3){case 0: return x+y; case 1: return -x+y; case 2: return x-y; case 3: return -x-y;} return 0.0f;};
+
+  int p[512];
+  srand(seed);
+  for(int i=0;i<256;i++) p[i]=i;
+  for(int i=255;i>0;i--){int j=rand()%(i+1); int tmp=p[i]; p[i]=p[j]; p[j]=tmp;}
+  for(int i=0;i<256;i++) p[256+i]=p[i];
+
+  auto perlin=[&](float x,float y){
+    int X=(int)x&255;
+    int Y=(int)y&255;
+    float xf=x-(int)x;
+    float yf=y-(int)y;
+    float u=fade(xf);
+    float v=fade(yf);
+    int A=p[X]+Y;
+    int B=p[X+1]+Y;
+    return lerp(
+      lerp(grad(p[A],xf,yf),grad(p[B],xf-1,yf),u),
+      lerp(grad(p[A+1],xf,yf-1),grad(p[B+1],xf-1,yf-1),u),v
+    );
+  };
+
+  float scale=0.07f;
+
+  for(int by=0;by<SCREEN_H;by+=BLOCK_SIZE){
+    for(int bx=0;bx<SCREEN_W;bx+=BLOCK_SIZE){
+      float n=perlin(bx*scale/BLOCK_SIZE, by*scale/BLOCK_SIZE);
+      n=(n+1)*0.5f;
+      TileType type;
+      bool hasTree=false, hasIron=false;
+
+      if(n<0.3f) type=T_WATER;
+      else if(n<0.6f){
+        type=T_GRASS;
+        if(rand()%100<7){ type=T_TREE; }
+      } else {
+        type=T_MOUNTAIN;
+        if(rand()%100<5){ type=T_IRON; }
+      }
+
+      int gx=bx/BLOCK_SIZE;
+      int gy=by/BLOCK_SIZE;
+      tiles[gx][gy]=type;
+
+      // кольори
+      switch(type){
+        case T_WATER: mapColors[gx][gy]=0x001F; break;
+        case T_GRASS: mapColors[gx][gy]=0x07E0; break;
+        case T_MOUNTAIN: mapColors[gx][gy]=0x7BE0; break;
+        case T_TREE: mapColors[gx][gy]=0x03E0; break;
+        case T_IRON: mapColors[gx][gy]=0xFFFF; break;
+      }
+
+      drawBlock(gx,gy);
+      delay(1);
+    }
+  }
+
+  // старт гравця
+  playerX=gridW()/2; playerY=gridH()/2;
+  playerFX=playerX; playerFY=playerY;
+  targetX=playerX; targetY=playerY;
+
+  // чистий інвентар
+  for(int i=0;i<INV_SLOTS;i++) inventory[i]=0;
+}
+
+// --- оновлення гравця та збір ресурсів ---
+void updatePlayer(){
+  float speed=0.05f;
+
+  int nextGX = playerX;
+  int nextGY = playerY;
+
+  if(abs(playerFX-targetX)>0.01){
+    float dx=(targetX-playerFX)*speed;
+    nextGX=(int)(playerFX+dx+0.5f);
+    if(tiles[nextGX][playerY]==T_WATER) dx=0;
+    playerFX+=dx;
+  }
+
+  if(abs(playerFY-targetY)>0.01){
+    float dy=(targetY-playerFY)*speed;
+    nextGY=(int)(playerFY+dy+0.5f);
+    if(tiles[playerX][nextGY]==T_WATER) dy=0;
+    playerFY+=dy;
+  }
+
+  playerX=(int)(playerFX+0.5f);
+  playerY=(int)(playerFY+0.5f);
+
+  // збір ресурсів
+  TileType t = tiles[playerX][playerY];
+  if(t==T_TREE){
+    inventory[0]++; // дерево
+    tiles[playerX][playerY]=T_GRASS;
+    mapColors[playerX][playerY]=0x07E0;
+  }
+  if(t==T_IRON && inventory[0]>=3){
+    inventory[1]++; // залізо
+    inventory[0]-=1;
+    tiles[playerX][playerY]=T_MOUNTAIN;
+    mapColors[playerX][playerY]=0x7BE0;
+  }
+
+  drawPlayer();
+}
+
+// --- малювання інвентаря ---
+int prevInventory[INV_SLOTS] = {0}; // попередній стан
+
+void drawInventory() {
+    bool changed = false;
+    for(int i=0;i<INV_SLOTS;i++){
+        if(inventory[i] != prevInventory[i]){
+            changed = true;
+            break;
+        }
+    }
+    if(!changed) return; // нічого не оновлюємо, якщо немає змін
+
+    // оновлюємо попередній стан
+    for(int i=0;i<INV_SLOTS;i++) prevInventory[i] = inventory[i];
+
+    int slotW = 20, slotH = 20;
+    int startX = SCREEN_W - INV_SLOTS*slotW - 5;
+    int startY = 10;
+
+    // фон за інвентарем
+    display.fillRect(SCREEN_W - INV_SLOTS*20 - 5, 0, INV_SLOTS*20, 25, 0xFFFF);
+    
+    display.setTextSize(1);
+    display.setTextColor(0x0000); // чорний колір для цифр
+
+    for(int i=0;i<INV_SLOTS;i++){
+        display.drawRect(startX+i*slotW, startY, slotW, slotH, 0x0000);
+
+        // колір ресурсу
+        if(i==0 && inventory[i]>0) display.fillRect(startX+i*slotW+2, startY+2, slotW-4, slotH-4, 0x07E0); // дерево
+        if(i==1 && inventory[i]>0) display.fillRect(startX+i*slotW+2, startY+2, slotW-4, slotH-4, 0xFFFF); // залізо
+
+        // кількість ресурсу
+        if(inventory[i]>0){
+            display.drawString(String(inventory[i]), startX+i*slotW + slotW - 8, startY + slotH - 10);
+        }
+    }
+}
+
+
+
+// --- головна функція ---
+void mainGame(int seed){
+  generateWorld(seed);
+
+  while(true){
+    int tx,ty;
+    if(display.getTouch(&tx,&ty)){
+      int gx=tx/BLOCK_SIZE;
+      int gy=ty/BLOCK_SIZE;
+      if(gx>=0 && gy>=0 && gx<gridW() && gy<gridH()){
+        targetX=gx;
+        targetY=gy;
+      }
+      delay(100);
+    }
+
+    updatePlayer();
+    drawInventory();
+    delay(30);
+  }
+}
+
+
+
+//--- end ai code ---
+
+
+
+
+
 //--- ai code ---
 // тимчасовий буфер під файл
 static uint8_t *fileBuf = nullptr;
@@ -10310,6 +10573,7 @@ void openNotesApp() {
 
 //--- AI code 90%---
 String showSimpleKeyboard(M5GFX &display) {
+  //display.setRotation(0);
   const char* layout[] = {
     "1234567890",
     "qwertyuiop",
