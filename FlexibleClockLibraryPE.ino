@@ -45,6 +45,12 @@ struct APinfo {
 };
 
 // ----------------- Іконки ------------------
+// 'Player', 15x15px
+const unsigned char Mini_Player [] PROGMEM = {
+  0xc0, 0x01, 0xe0, 0x03, 0xe0, 0x03, 0xe0, 0x03, 0xc0, 0x01, 0x80, 0x00, 0xf8, 0x0f, 0xfc, 0x1f, 
+  0xce, 0x39, 0xe6, 0x33, 0x72, 0x27, 0x30, 0x06, 0x30, 0x06, 0x30, 0x06, 0x30, 0x06
+};
+
 // 'off', 16x16px
 const unsigned char taskbar_off [] PROGMEM = {
   0x80, 0x01, 0x80, 0x01, 0x98, 0x19, 0x9c, 0x39, 0x8c, 0x31, 0x86, 0x61, 0x86, 0x61, 0x86, 0x61,
@@ -9294,6 +9300,7 @@ function clearAll(){
 #define SCREEN_W 960
 #define SCREEN_H 540
 #define INV_SLOTS 5
+byte useTextures = 1;
 
 enum TileType {T_WATER, T_GRASS, T_MOUNTAIN, T_TREE, T_IRON};
 
@@ -9341,10 +9348,16 @@ void drawPlayer() {
         // зберігаємо нову попередню позицію
         prevPlayerX = playerX;
         prevPlayerY = playerY;
+        // малюємо гравця
+        if (useTextures) {
+                   display.drawXBitmap(playerX*BLOCK_SIZE, playerY*BLOCK_SIZE, Mini_Player, BLOCK_SIZE, BLOCK_SIZE, 0x001F);
+                  } else {
+                   display.fillRect(playerX*BLOCK_SIZE, playerY*BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE, 0xF800);
+                  }
+        //isplay.fillRect(playerX*BLOCK_SIZE, playerY*BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE, 0xF800);
     }
 
-    // малюємо гравця
-    display.fillRect(playerX*BLOCK_SIZE, playerY*BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE, 0xF800);
+    
 }
 
 // --- генерація карти ---
