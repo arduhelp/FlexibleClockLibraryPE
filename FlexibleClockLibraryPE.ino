@@ -9359,6 +9359,40 @@ void drawPlayer() {
 
     
 }
+//--- build ---
+void handleInventoryTouch(int tx, int ty){
+    int slotW = 20, slotH = 20;
+    int startX = SCREEN_W - INV_SLOTS*slotW - 5;
+    int startY = 10;
+
+    for(int i=0;i<INV_SLOTS;i++){
+        if(tx >= startX + i*slotW && tx < startX + (i+1)*slotW &&
+           ty >= startY && ty < startY + slotH){
+            
+            int gx = playerX + 1; // праворуч від гравця
+            int gy = playerY;
+
+            // ставимо блок, якщо є ресурс
+            if(i==0 && inventory[0]>0){ // дерево
+                tiles[gx][gy] = T_TREE;
+                mapColors[gx][gy] = 0x03E0;
+                inventory[0]--;
+            }
+            else if(i==1 && inventory[1]>0){ // залізо
+                tiles[gx][gy] = T_IRON;
+                mapColors[gx][gy] = 0xFFFF;
+                inventory[1]--;
+            }
+            else if(i==4){ // ламання
+                TileType t = tiles[gx][gy];
+                if(t == T_TREE) { inventory[0]++; tiles[gx][gy]=T_GRASS; mapColors[gx][gy]=0x07E0; }
+                if(t == T_IRON) { inventory[1]++; tiles[gx][gy]=T_MOUNTAIN; mapColors[gx][gy]=0x7BE0; }
+            }
+
+            drawBlock(gx, gy);
+        }
+    }
+}
 
 // --- генерація карти ---
 void generateWorld(int seed){
@@ -9490,12 +9524,12 @@ void drawInventory() {
     // оновлюємо попередній стан
     for(int i=0;i<INV_SLOTS;i++) prevInventory[i] = inventory[i];
 
-    int slotW = 20, slotH = 20;
+    int slotW = 30, slotH = 30;
     int startX = SCREEN_W - INV_SLOTS*slotW - 5;
-    int startY = 10;
+    int startY = 12;
 
     // фон за інвентарем
-    display.fillRect(SCREEN_W - INV_SLOTS*20 - 5, 0, INV_SLOTS*20, 25, 0xFFFF);
+    display.fillRect(SCREEN_W - INV_SLOTS*30 - 5, 0, INV_SLOTS*30, 35, 0xFFFF);
     
     display.setTextSize(1);
     display.setTextColor(0x0000); // чорний колір для цифр
@@ -9521,21 +9555,42 @@ void mainGame(int seed){
   generateWorld(seed);
 
   while(true){
-    int tx,ty;
-    if(display.getTouch(&tx,&ty)){
-      int gx=tx/BLOCK_SIZE;
-      int gy=ty/BLOCK_SIZE;
-      if(gx>=0 && gy>=0 && gx<gridW() && gy<gridH()){
-        targetX=gx;
-        targetY=gy;
-      }
-      delay(100);
+    int tx, ty;
+    if(display.getTouch(&tx, &ty)){
+        // спочатку перевіряємо інвентар
+        int slotW = 30, slotH = 30;
+        int startX = SCREEN_W - INV_SLOTS*slotW - 5;
+        int startY = 10;
+
+        bool touchedInventory = false;
+        for(int i=0;i<INV_SLOTS;i++){
+            if(tx >= startX + i*slotW && tx < startX + (i+1)*slotW &&
+               ty >= startY && ty < startY + slotH){
+                handleInventoryTouch(tx, ty); // обробка натискання на слот
+                touchedInventory = true;
+                break;
+            }
+        }
+
+        // якщо не інвентар — рухаємо гравця
+        if(!touchedInventory){
+            int gx = tx / BLOCK_SIZE;
+            int gy = ty / BLOCK_SIZE;
+            if(gx>=0 && gy>=0 && gx<gridW() && gy<gridH()){
+                targetX = gx;
+                targetY = gy;
+            }
+        }
+
+        delay(100);
     }
 
     updatePlayer();
     drawInventory();
     delay(30);
-  }
+}
+
+
 }
 
 
