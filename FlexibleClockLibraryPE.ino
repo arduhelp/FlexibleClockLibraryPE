@@ -16,17 +16,24 @@ extern "C" {
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WebServer.h>
+#include <SD.h>
+#include <SPI.h>
 
 WebServer server(80);
 HTTPClient http;
 byte httpsProxy = false;
-String httpsProxyURL = "http://127.0.0.1:8080/fetch/"; //example: "http://127.0.0.1:8080/fetch/"
+String httpsProxyURL = "http://192.168.0.100:8080/fetch/"; //example: "http://127.0.0.1:8080/fetch/"
 String wpurl = ""; //---v---
-const char* WallpaperURL = "http://127.0.0.1:8000/image.jpg"; //example: "http://127.0.0.1:8080/image,jpg"
+const char* WallpaperURL = "http://192.168.0.100:8000/image.jpg"; //example: "http://127.0.0.1:8080/image,jpg"
+
+#define SD_SPI_CS_PIN   47
+#define SD_SPI_SCK_PIN  39
+#define SD_SPI_MOSI_PIN 38
+#define SD_SPI_MISO_PIN 40
 
 
 M5GFX display;
-String FCLver = "v1.1s8 m5paper";
+String FCLver = "v1.1s9 m5paper";
 
 int tx, ty;
 int x, y;
@@ -8709,6 +8716,50 @@ void drawJPGfromURL(const char* url, int x, int y) {
   http.end();
 }
 //--- end AI code 60% ---
+//--- ai codee ---
+// --- Ініціалізація SD ---
+bool SD_begin() {
+    SPI.begin(SD_SPI_SCK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_CS_PIN);
+    delay(100);
+    SD.begin(SD_SPI_CS_PIN, SPI, 25000000);
+    delay(100);
+  if (!SD.begin(SD_SPI_CS_PIN, SPI, 25000000)) {
+    display.println("SD init failed!");
+        return false;
+  } else {
+    display.println("SD initialized!");
+    return true;
+  }
+}
+
+
+//--- end ai code ---
+void SD_info() {
+    uint8_t type = SD.cardType();
+    if(type == CARD_NONE) {
+        display.println("No SD card inserted!");
+        return;
+    }
+
+    // Тип карти
+    switch(type) {
+        case CARD_MMC:  display.println("Card Type: MMC"); break;
+        case CARD_SD:   display.println("Card Type: SD"); break;
+        case CARD_SDHC: display.println("Card Type: SDHC"); break;
+        default:        display.println("Card Type: Unknown"); break;
+    }
+
+    // Розмір карти (MB)
+    uint64_t sizeMB = SD.cardSize() / (1024 * 1024);
+    Serial.printf("Card size: %llu MB\n", sizeMB);
+
+    // Місце зайнято/вільне
+    uint64_t used = SD.usedBytes() / (1024 * 1024);
+    Serial.printf("Used: %llu MB\n", used);
+}
+
+
+
 
 struct Card {
   String rank;
@@ -8756,7 +8807,7 @@ Button buttons[] = {
   {28,  50, 100, 100, "Wi-Fi", item_bitmap_wifi,  openWiFiApp},
   {156, 50, 100, 100, "Paint", item_bitmap_image, openPaintApp},
   {284, 50, 100, 100, "Terminal", item_bitmap_terminal, openTERMINALApp},
-  {412, 50, 100, 100, "Files", item_bitmap_files, openNotesApp},
+  {412, 50, 100, 100, "Files", item_bitmap_files, FS_visual},
   {28,  178, 100, 100, "Clock", item_bitmap_clock,  openWiFiApp},
   {156, 178, 100, 100, "browser", item_bitmap_browser, openBrowserApp},
   {284, 178, 100, 100, "Games", item_bitmap_game, OpenGames},
@@ -8812,7 +8863,8 @@ void handleTouch(Button* btns, int count) {
 //---------------
 //--- taskbar ---
 //---------------
-void taskbar() { //----opti----
+void taskbar(){ //----opti----
+  //display.setTextDatum(textdatum_t::bottom_left);
   int tbx, tby;
   if (display.getTouch(&tbx, &tby)) {
     if (tbx < 20 && tby < 20) {
@@ -8931,9 +8983,128 @@ void LockApp(byte callKeyboard) {
 
 //----- terminal -----//
 //--- TERMINALApp0 ---//
+//------ TERM0 ------//
+String currentPath = "/"; 
 void openTERMINALApp(){
   while (true){
     String cmd = showSimpleKeyboard(display);
+
+    // --- SD навігація ai code ---
+    if(cmd == "ls") {
+      File dir = SD.open(currentPath);
+      File file = dir.openNextFile();
+      display.fillScreen(TFT_WHITE);
+      display.setCursor(0,0);
+      while(file){
+        display.println(file.name());
+        file = dir.openNextFile();
+      }
+      display.display();
+      continue;
+    }
+    
+    if(cmd.startsWith("cd ")) {
+      String folder = cmd.substring(3);
+      if(folder == "..") {
+        // Піднятися на рівень
+        int lastSlash = currentPath.lastIndexOf('/');
+        if(lastSlash > 0){
+          currentPath = currentPath.substring(0, lastSlash);
+        } else {
+          currentPath = "/";
+        }
+      } else {
+        String newPath = currentPath + "/" + folder;
+        if(SD.exists(newPath)){
+          currentPath = newPath;
+        } else {
+          display.fillScreen(TFT_WHITE);
+          display.setCursor(0,0);
+          display.println("Folder not found!");
+          display.display();
+        }
+      }
+      continue;
+    }
+     // --- Створити папку ---
+    if(cmd.startsWith("mkdir ")) {
+      String folderName = cmd.substring(6);
+      String newPath = currentPath + "/" + folderName;
+      if(SD.exists(newPath)){
+        display.fillScreen(TFT_WHITE);
+        display.setCursor(0,0);
+        display.println("Folder already exists!");
+        display.display();
+      } else {
+        if(SD.mkdir(newPath)){
+          display.fillScreen(TFT_WHITE);
+          display.setCursor(0,0);
+          display.println("Folder created!");
+          display.display();
+        } else {
+          display.fillScreen(TFT_WHITE);
+          display.setCursor(0,0);
+          display.println("Error creating folder!");
+          display.display();
+        }
+      }
+      continue;
+    }
+     // --- touch <filename> ---
+    if(cmd.startsWith("touch ")) {
+      String filename = cmd.substring(6);
+      String path = currentPath + "/" + filename;
+      if(SD.exists(path)){
+        display.fillScreen(TFT_WHITE);
+        display.setCursor(0,0);
+        display.println("File already exists!");
+        display.display();
+      } else {
+        File f = SD.open(path, FILE_WRITE);
+        if(f){
+          f.close();
+          display.fillScreen(TFT_WHITE);
+          display.setCursor(0,0);
+          display.println("File created!");
+          display.display();
+        } else {
+          display.fillScreen(TFT_WHITE);
+          display.setCursor(0,0);
+          display.println("Error creating file!");
+          display.display();
+        }
+      }
+      continue;
+    }
+
+    // --- cat <filename> ---
+    if(cmd.startsWith("cat ")) {
+      String filename = cmd.substring(4);
+      String path = currentPath + "/" + filename;
+      if(!SD.exists(path)){
+        display.fillScreen(TFT_WHITE);
+        display.setCursor(0,0);
+        display.println("File not found!");
+        display.display();
+      } else {
+        File f = SD.open(path);
+        display.fillScreen(TFT_WHITE);
+        display.setCursor(0,0);
+        while(f.available()){
+          display.write(f.read());
+        }
+        display.display();
+        f.close();
+      }
+      continue;
+    }
+    
+//--- end ai code ---
+
+
+
+
+    
     if(cmd == "/beacon"){wifi_beacon_flooder();}
     if(cmd == "/paint"){openPaintApp();}
     if(cmd == "/bj21"){Blackjack21();}
@@ -8941,6 +9112,14 @@ void openTERMINALApp(){
     if(cmd == "/ta"){TestAnimation();}
     if(cmd == "/ed"){eBoard();}
     if(cmd == "/gw"){mainGame(123456);}
+    if(cmd == "/tc1"){TC_start(1);}
+    if(cmd == "/tc2"){TC_start(2);}
+    if(cmd == "/tc3"){TC_start(3);}
+    if(cmd == "/tc4"){TC_start(4);}
+    if(cmd == "/c"){CALC_start();}
+    if(cmd == "/b"){buzzertest();}
+    if(cmd == "/sd"){if(SD_begin()) {SD_info();} }
+    if(cmd == "/fs"){FS_visualbeta(); }
     if(cmd == "q")return;
     if(cmd == "")return;
     }
@@ -9124,27 +9303,29 @@ void OpenGames(){
   display.clear(TFT_WHITE);
   display.display();
 
-  String games[] = {">  Web Paint", ">  BlackJack21", ">  Checkers", "null", "null"};
+  String games[] = {"> Calculator", ">  BlackJack21", ">  Checkers", ">  Web Paint", "null"};
   int gameCount = sizeof(games) / sizeof(games[0]);
 
   int y = 30;
   for(int i=0;i<gameCount;i++){
     display.setCursor(20,y);
     display.println(games[i]);
-    y+=30;
+    y+=60;
   }
   
   display.drawLine(20, 30, 500, 30, TFT_BLACK);
-  display.drawLine(20, 60, 500, 60, TFT_BLACK);
   display.drawLine(20, 90, 500, 90, TFT_BLACK);
+  display.drawLine(20, 150, 500, 150, TFT_BLACK);
+  display.drawLine(20, 210, 500, 210, TFT_BLACK);
   while(true){
 
   if (display.getTouch(&tx, &ty)) {
      display.fillCircle(tx, ty, 5, TFT_BLACK);
           if (tx < 20 && ty < 20) return;
-          if (ty > 0 && ty < 30) OpenWebPaintApp();
-          if (ty > 30 && ty < 60){ display.fillRect(0, 0, display.width(), display.height(), TFT_WHITE); startBlackJack();}
-          if (ty > 60 && ty < 90){ display.fillRect(0, 0, display.width(), display.height(), TFT_WHITE); CheckersGame();}
+          if (ty > 0 && ty < 30){ display.fillRect(0, 0, display.width(), display.height(), TFT_WHITE); CALC_start(); } 
+          if (ty > 30 && ty < 90){ display.fillRect(0, 0, display.width(), display.height(), TFT_WHITE); startBlackJack();}
+          if (ty > 90 && ty < 150){ display.fillRect(0, 0, display.width(), display.height(), TFT_WHITE); CheckersGame();}
+          if (ty > 150 && ty < 210){ display.fillRect(0, 0, display.width(), display.height(), TFT_WHITE); OpenWebPaintApp();}
          
   }
 }
@@ -9302,7 +9483,7 @@ function clearAll(){
 #define INV_SLOTS 5
 byte useTextures = 1;
 
-enum TileType {T_WATER, T_GRASS, T_MOUNTAIN, T_TREE, T_IRON};
+enum TileType {T_WATER, T_GRASS, T_MOUNTAIN, T_TREE, T_IRON, T_STONE};
 
 // ---- масиви для карти ----
 TileType tiles[SCREEN_W/BLOCK_SIZE][SCREEN_H/BLOCK_SIZE];
@@ -9354,7 +9535,7 @@ void drawPlayer() {
                   } else {
                    display.fillRect(playerX*BLOCK_SIZE, playerY*BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE, 0xF800);
                   }
-        //isplay.fillRect(playerX*BLOCK_SIZE, playerY*BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE, 0xF800);
+        //display.fillRect(playerX*BLOCK_SIZE, playerY*BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE, 0xF800);
     }
 
     
@@ -9365,7 +9546,7 @@ void handleInventoryTouch(int tx, int ty){
     int startX = SCREEN_W - INV_SLOTS*slotW - 5;
     int startY = 10;
 
-    for(int i=0;i<INV_SLOTS;i++){
+    for(int i=-1;i<INV_SLOTS;i++){
         if(tx >= startX + i*slotW && tx < startX + (i+1)*slotW &&
            ty >= startY && ty < startY + slotH){
             
@@ -9383,10 +9564,17 @@ void handleInventoryTouch(int tx, int ty){
                 mapColors[gx][gy] = 0xFFFF;
                 inventory[1]--;
             }
+            else if(i==2 && inventory[2]>0){ // STONE
+                tiles[gx][gy] = T_STONE;
+                mapColors[gx][gy] = 0x4208;
+                inventory[2]--;
+            }
             else if(i==4){ // ламання
                 TileType t = tiles[gx][gy];
                 if(t == T_TREE) { inventory[0]++; tiles[gx][gy]=T_GRASS; mapColors[gx][gy]=0x07E0; }
                 if(t == T_IRON) { inventory[1]++; tiles[gx][gy]=T_MOUNTAIN; mapColors[gx][gy]=0x7BE0; }
+                if(t == T_STONE) { inventory[2]++; tiles[gx][gy]=T_MOUNTAIN; mapColors[gx][gy]=0x7BE0; }
+                
             }
 
             drawBlock(gx, gy);
@@ -9438,6 +9626,8 @@ void generateWorld(int seed){
       } else {
         type=T_MOUNTAIN;
         if(rand()%100<5){ type=T_IRON; }
+        if(rand()%100<10){ type=T_STONE; }
+        
       }
 
       int gx=bx/BLOCK_SIZE;
@@ -9451,6 +9641,8 @@ void generateWorld(int seed){
         case T_MOUNTAIN: mapColors[gx][gy]=0x7BE0; break;
         case T_TREE: mapColors[gx][gy]=0x03E0; break;
         case T_IRON: mapColors[gx][gy]=0xFFFF; break;
+        case T_STONE: mapColors[gx][gy]=0x4208; break;
+
       }
 
       drawBlock(gx,gy);
@@ -9477,14 +9669,14 @@ void updatePlayer(){
   if(abs(playerFX-targetX)>0.01){
     float dx=(targetX-playerFX)*speed;
     nextGX=(int)(playerFX+dx+0.5f);
-    if(tiles[nextGX][playerY]==T_WATER) dx=0;
+    if(tiles[nextGX][playerY]==T_WATER || tiles[nextGX][playerY]==T_STONE) dx=0;
     playerFX+=dx;
   }
 
   if(abs(playerFY-targetY)>0.01){
     float dy=(targetY-playerFY)*speed;
     nextGY=(int)(playerFY+dy+0.5f);
-    if(tiles[playerX][nextGY]==T_WATER) dy=0;
+    if(tiles[playerX][nextGY]==T_WATER || tiles[playerX][nextGY]==T_STONE) dy=0;
     playerFY+=dy;
   }
 
@@ -9501,6 +9693,12 @@ void updatePlayer(){
   if(t==T_IRON && inventory[0]>=3){
     inventory[1]++; // залізо
     inventory[0]-=1;
+    tiles[playerX][playerY]=T_MOUNTAIN;
+    mapColors[playerX][playerY]=0x7BE0;
+  }
+  if(t==T_STONE && inventory[1]>=3){
+    inventory[2]++; // STONE
+    inventory[1]-=1;
     tiles[playerX][playerY]=T_MOUNTAIN;
     mapColors[playerX][playerY]=0x7BE0;
   }
@@ -9540,6 +9738,8 @@ void drawInventory() {
         // колір ресурсу
         if(i==0 && inventory[i]>0) display.fillRect(startX+i*slotW+2, startY+2, slotW-4, slotH-4, 0x07E0); // дерево
         if(i==1 && inventory[i]>0) display.fillRect(startX+i*slotW+2, startY+2, slotW-4, slotH-4, 0xFFFF); // залізо
+        if(i==2 && inventory[i]>0) display.fillRect(startX+i*slotW+2, startY+2, slotW-4, slotH-4, 0x4208); // STONE
+
 
         // кількість ресурсу
         if(inventory[i]>0){
@@ -10105,6 +10305,372 @@ void TouchTest() {
     delay(30);
   }
 }
+
+void FS_visual() {
+    String path = "/";
+    bool exitFS = false;
+
+    while(!exitFS) {
+        display.fillScreen(TFT_WHITE);
+        display.setCursor(0,0);
+        display.setTextColor(TFT_BLACK);
+        display.println(".. <- Back");
+
+        File dir = SD.open(path);
+        if(!dir){
+            display.println("Cannot open directory!");
+            delay(500);
+            return;
+        }
+
+        const int MAX_ITEMS = 50;
+        String items[MAX_ITEMS];
+        bool isDir[MAX_ITEMS];
+        int count = 0;
+
+        File file = dir.openNextFile();
+        while(file && count < MAX_ITEMS){
+            items[count] = file.name();
+            isDir[count] = file.isDirectory();
+            count++;
+            file = dir.openNextFile();
+        }
+
+        for(int i=0;i<count;i++){
+            display.println((isDir[i]? "[D] ":"[F] ") + items[i]);
+        }
+        display.display();
+
+        while(true){
+            int16_t x,y;
+            if(display.getTouch(&x,&y)){
+              display.fillCircle(x, y, 5, TFT_BLACK);
+                if(x<20 && y<20){
+                    if(path == "/") return;
+                    int lastSlash = path.lastIndexOf('/');
+                    if(lastSlash>0) path = path.substring(0,lastSlash);
+                    else path = "/";
+                    break;
+                }
+
+                int idx = (y / 20) - 1;
+                if(idx>=0 && idx<count){
+                    String selected = items[idx];
+                    String fullPath = path + "/" + selected;
+
+                    if(isDir[idx]){
+                        path = fullPath;
+                        break;
+                    } else {
+                        // --- Відкриваємо файл ---
+                        if(selected.endsWith(".txt") || selected.endsWith(".TXT")){
+                            File f = SD.open(fullPath);
+                            if(!f) break;
+                            display.fillScreen(TFT_WHITE);
+                            display.setCursor(0,0);
+                            while(f.available()){
+                                String line = f.readStringUntil('\n');
+                                display.println(line);
+                            }
+                            display.display();
+                            f.close();
+                        } 
+                        else if(selected.endsWith(".jpg") || selected.endsWith(".JPG") ||
+                                selected.endsWith(".png") || selected.endsWith(".PNG")) {
+
+                            File f = SD.open(fullPath);
+                            if(!f) break;
+                            size_t fileSize = f.size();
+
+                            // --- Читаємо файл у буфер ---
+                            uint8_t *buf = (uint8_t*)malloc(fileSize);
+                            if(buf){
+                                f.read(buf, fileSize);
+                                f.close();
+                                display.fillScreen(TFT_WHITE);
+                                if(selected.endsWith(".jpg") || selected.endsWith(".JPG"))
+                                    display.drawJpg(buf, fileSize, 0, 0);
+                                else
+                                    display.drawPng(buf, fileSize, 0, 0);
+                                free(buf);
+                            } else {
+                                display.fillScreen(TFT_WHITE);
+                                display.setCursor(0,0);
+                                display.println("Not enough RAM for image!");
+                                delay(500);
+                            }
+                            display.display();
+                        } 
+                        else {
+                            display.fillScreen(TFT_WHITE);
+                            display.setCursor(0,0);
+                            display.println("Cannot open this file type");
+                            delay(500);
+                            display.display();
+                        }
+
+                        // --- чекаємо назад ---
+                        while(true){
+                            int16_t bx,by;
+                            if(display.getTouch(&bx,&by)){
+                                if(bx<20 && by<20) break;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+
+
+void FS_visualbeta() {
+    String path = "/";
+    bool exitFS = false;
+
+    while(!exitFS) {
+        display.fillScreen(TFT_WHITE);
+        display.setCursor(0,0);
+        display.setTextColor(TFT_BLACK);
+        display.println(".. <- Back");
+
+        File dir = SD.open(path);
+        if(!dir){
+            display.println("Cannot open directory!");
+            return;
+        }
+
+        const int MAX_ITEMS = 50;
+        String items[MAX_ITEMS];
+        bool isDir[MAX_ITEMS];
+        int count = 0;
+
+        File file = dir.openNextFile();
+        while(file && count < MAX_ITEMS){
+            items[count] = file.name();
+            isDir[count] = file.isDirectory();
+            count++;
+            file = dir.openNextFile();
+        }
+
+        for(int i=0;i<count;i++){
+            display.println((isDir[i]? "[D] ":"[F] ") + items[i]);
+        }
+        display.display();
+
+        while(true){
+            int16_t x,y;
+            if(display.getTouch(&x,&y)){
+                display.fillCircle(x, y, 5, TFT_BLACK);
+                // back to parent
+                if(x<20 && y<20){
+                    if(path == "/") return;
+                    int lastSlash = path.lastIndexOf('/');
+                    if(lastSlash>0) path = path.substring(0,lastSlash);
+                    else path = "/";
+                    break;
+                }
+
+                int idx = (y / 20) - 1;
+                if(idx>=0 && idx<count){
+                    String selected = items[idx];
+                    String fullPath = path + "/" + selected;
+
+                    if(isDir[idx]){
+                        path = fullPath;
+                        break;
+                    } else {
+                        // --- IMAGE VIEWER: знизу показуємо < та > ---
+                        // Спочатку зберемо масив тільки з image-файлами у цій папці
+                        const int MAX_IMAGES = 100;
+                        String images[MAX_IMAGES];
+                        int imgCount = 0;
+                        for(int k=0;k<count && imgCount<MAX_IMAGES;k++){
+                            String n = items[k];
+                            String nl = n;
+                            nl.toLowerCase();
+                            if(nl.endsWith(".jpg") || nl.endsWith(".jpeg") || nl.endsWith(".png")) {
+                                images[imgCount++] = items[k];
+                            }
+                        }
+
+                        // знайдемо індекс поточного файлу у масиві images
+                        int curImgIndex = -1;
+                        for(int k=0;k<imgCount;k++){
+                            if(images[k] == selected) { curImgIndex = k; break; }
+                        }
+                        if(curImgIndex == -1) {
+                            // файл не в списку image-файлів (можливо інший формат) — просто відкриваємо як раніше
+                            File f = SD.open(fullPath);
+                            if(!f) break;
+                            size_t fileSize = f.size();
+                            uint8_t *buf = (uint8_t*)malloc(fileSize);
+                            if(buf){
+                                f.read(buf, fileSize);
+                                f.close();
+                                display.fillScreen(TFT_WHITE);
+                                if(selected.endsWith(".jpg") || selected.endsWith(".JPG") || selected.endsWith(".jpeg"))
+                                    display.drawJpg(buf, fileSize, 0, 0);
+                                else
+                                    display.drawPng(buf, fileSize, 0, 0);
+                                free(buf);
+                            } else {
+                                display.fillScreen(TFT_WHITE);
+                                display.setCursor(0,0);
+                                display.println("Not enough RAM for image!");
+                                display.display();
+                                f.close();
+                            }
+                            // wait for back
+                            while(true){
+                                int16_t bx,by;
+                                if(display.getTouch(&bx,&by)){
+                                    if(bx<20 && by<20) break;
+                                }
+                            }
+                            break;
+                        }
+
+                        // --- Переходимо в режим перегляду з навігацією ---
+                        bool viewerExit = false;
+                        while(!viewerExit){
+                            // відкриваємо поточну картинку
+                            String imgName = images[curImgIndex];
+                            String imgPath = path + "/" + imgName;
+                            File fimg = SD.open(imgPath);
+                            if(!fimg) {
+                                // неможливо відкрити — вихід до списку
+                                viewerExit = true;
+                                break;
+                            }
+                            size_t fileSize = fimg.size();
+                            uint8_t *buf = (uint8_t*)malloc(fileSize);
+                            if(!buf) {
+                                // пам'яті не вистачає
+                                display.fillScreen(TFT_WHITE);
+                                display.setCursor(0,0);
+                                display.println("Not enough RAM for image!");
+                                display.display();
+                                fimg.close();
+                                // чекати тап назад
+                                while(true){
+                                    int16_t bx,by;
+                                    if(display.getTouch(&bx,&by)){
+                                        if(bx<20 && by<20) break;
+                                    }
+                                }
+                                viewerExit = true;
+                                break;
+                            }
+                            fimg.read(buf, fileSize);
+                            fimg.close();
+
+                            // намалювати картинку
+                            display.fillScreen(TFT_WHITE);
+                            String limg = imgName; limg.toLowerCase();
+                            if(limg.endsWith(".jpg") || limg.endsWith(".jpeg"))
+                                display.drawJpg(buf, fileSize, 0, 0);
+                            else
+                                display.drawPng(buf, fileSize, 0, 0);
+                            free(buf);
+
+                            // Показуємо кнопки внизу та індикацію сторінок
+                            int W = 540; // ширина дисплея (M5Paper)
+                            int H = 960; // висота дисплея
+                            int btnH = 36;
+                            int btnW = 80;
+                            int margin = 8;
+                            int yBtn = H - btnH - margin;
+
+                            // Ліва кнопка <
+                            if(curImgIndex > 0) {
+                                display.fillRoundRect(margin, yBtn, btnW, btnH, 6, TFT_BLACK);
+                                display.setTextColor(TFT_WHITE);
+                                display.setTextDatum(textdatum_t::middle_center);
+                                display.drawString("<", margin + btnW/2, yBtn + btnH/2);
+                            } else {
+                                // disabled
+                                display.drawRoundRect(margin, yBtn, btnW, btnH, 6, TFT_BLACK);
+                                display.setTextColor(TFT_BLACK);
+                                display.setTextDatum(textdatum_t::middle_center);
+                                display.drawString("<", margin + btnW/2, yBtn + btnH/2);
+                            }
+
+                            // Права кнопка >
+                            if(curImgIndex < imgCount - 1) {
+                                display.fillRoundRect(W - margin - btnW, yBtn, btnW, btnH, 6, TFT_BLACK);
+                                display.setTextColor(TFT_WHITE);
+                                display.setTextDatum(textdatum_t::middle_center);
+                                display.drawString(">", W - margin - btnW/2, yBtn + btnH/2);
+                            } else {
+                                display.drawRoundRect(W - margin - btnW, yBtn, btnW, btnH, 6, TFT_BLACK);
+                                display.setTextColor(TFT_BLACK);
+                                display.setTextDatum(textdatum_t::middle_center);
+                                display.drawString(">", W - margin - btnW/2, yBtn + btnH/2);
+                            }
+
+                            // Індикація номера сторінки по центру
+                            String label = String(curImgIndex+1) + " / " + String(imgCount);
+                            display.setTextDatum(textdatum_t::middle_center);
+                            display.setTextColor(TFT_BLACK);
+                            display.drawString(label, W/2, yBtn + btnH/2);
+
+                            display.display(); // відправити оновлення
+
+                            // Чекаємо торк
+                            bool innerBreak = false;
+                            while(!innerBreak){
+                                int16_t tx, ty;
+                                if(display.getTouch(&tx,&ty)){
+                                    // back to file list
+                                    if(tx<20 && ty<20){
+                                        innerBreak = true;
+                                        viewerExit = true;
+                                        break;
+                                    }
+                                    // натиск на ліву кнопку
+                                    if(tx >= margin && tx <= margin + btnW && ty >= yBtn && ty <= yBtn + btnH){
+                                        if(curImgIndex > 0) {
+                                            curImgIndex--;
+                                        }
+                                        innerBreak = true; // перерендиримо
+                                        break;
+                                    }
+                                    // натиск на праву кнопку
+                                    if(tx >= W - margin - btnW && tx <= W - margin && ty >= yBtn && ty <= yBtn + btnH){
+                                        if(curImgIndex < imgCount - 1) {
+                                            curImgIndex++;
+                                        }
+                                        innerBreak = true;
+                                        break;
+                                    }
+                                    // якщо тап по самій картинці — можна зробити next
+                                    int contentTop = 0;
+                                    int contentBottom = yBtn - margin;
+                                    if(ty >= contentTop && ty <= contentBottom){
+                                        // тап у центрі — йдемо на наступну якщо є
+                                        if(curImgIndex < imgCount - 1) { curImgIndex++; innerBreak = true; break; }
+                                    }
+                                }
+                                delay(50);
+                            } // чек торку у viewer
+                        } // viewer loop
+
+                        break; // повернення до списку після viewer або помилки
+                    } // image/file branch
+                } // idx valid
+            } // if touch on list
+            delay(10);
+        } // inner while (list loop)
+    } // outer while
+}
+
+
+
+
 
 
 void TestAnimation() {
@@ -10721,6 +11287,545 @@ skipRedraw:;
 }
 
 //--- End AI code 90%---
+
+//--- ai code ---
+
+#define TC_MAP_W 10
+#define TC_MAP_H 10
+#define TC_CELL_SIZE (540 / TC_MAP_W)
+#define TC_MAP_TOP ((960 - (TC_MAP_H * TC_CELL_SIZE)) / 2)
+
+struct TC_Player {
+  int x, y;
+  bool alive;
+  uint16_t color;
+  char symbol;
+  bool human;
+};
+
+uint8_t TC_map[TC_MAP_W][TC_MAP_H];
+TC_Player TC_players[4];
+uint8_t TC_numPlayers = 4;
+uint8_t TC_currentPlayer = 0;
+
+uint16_t TC_playerColors[4] = {TFT_RED, TFT_GREEN, TFT_BLUE, TFT_YELLOW};
+char TC_playerSymbols[4] = {'+', '@', '?', '#'};
+
+// --------------------------------------
+// Draw one cell
+// --------------------------------------
+void TC_drawCell(int x, int y, uint8_t value) {
+  int px = x * TC_CELL_SIZE;
+  int py = TC_MAP_TOP + y * TC_CELL_SIZE;
+  uint16_t color = TFT_WHITE;
+  if (value > 0) color = TC_playerColors[value - 1];
+  display.fillRect(px, py, TC_CELL_SIZE, TC_CELL_SIZE, color);
+  display.drawRect(px, py, TC_CELL_SIZE, TC_CELL_SIZE, TFT_BLACK);
+  display.display(px, py, TC_CELL_SIZE, TC_CELL_SIZE);
+}
+
+// --------------------------------------
+// Draw full map
+// --------------------------------------
+void TC_drawFullMap() {
+  for (int y = 0; y < TC_MAP_H; y++) {
+    for (int x = 0; x < TC_MAP_W; x++) {
+      TC_drawCell(x, y, TC_map[x][y]);
+    }
+  }
+}
+
+// --------------------------------------
+// Draw player symbols + top info
+// --------------------------------------
+void TC_drawPlayersAndTurn() {
+  // clear top bar
+  display.fillRect(0, 0, 540, 40, TFT_WHITE);
+  display.setTextColor(TFT_BLACK);
+  display.drawString("Turn:", 10, 25);
+  display.setTextColor(TC_playerColors[TC_currentPlayer]);
+  display.drawString(String(TC_playerSymbols[TC_currentPlayer]), 80, 25);
+  display.display(0, 0, 540, 40);
+
+  // draw players on map
+  for (int i = 0; i < TC_numPlayers; i++) {
+    if (!TC_players[i].alive) continue;
+    int px = TC_players[i].x * TC_CELL_SIZE + TC_CELL_SIZE / 3;
+    int py = TC_MAP_TOP + TC_players[i].y * TC_CELL_SIZE + TC_CELL_SIZE / 3;
+    display.setTextColor(TFT_BLACK);
+    display.drawString(String(TC_playerSymbols[i]), px, py);
+    display.display(px, py, TC_CELL_SIZE, TC_CELL_SIZE);
+  }
+}
+
+// --------------------------------------
+// Spawn players
+// --------------------------------------
+void TC_spawnPlayers(uint8_t nHumans) {
+  for (int i = 0; i < 4; i++) {
+    TC_players[i].alive = true;
+    TC_players[i].color = TC_playerColors[i];
+    TC_players[i].symbol = TC_playerSymbols[i];
+    TC_players[i].human = (i < nHumans);
+  }
+
+  // spawn at corners
+  TC_players[0].x = 0; TC_players[0].y = 0;
+  TC_players[1].x = TC_MAP_W - 1; TC_players[1].y = 0;
+  TC_players[2].x = 0; TC_players[2].y = TC_MAP_H - 1;
+  TC_players[3].x = TC_MAP_W - 1; TC_players[3].y = TC_MAP_H - 1;
+
+  memset(TC_map, 0, sizeof(TC_map));
+  for (int i = 0; i < 4; i++) {
+    TC_map[TC_players[i].x][TC_players[i].y] = i + 1;
+  }
+}
+
+// --------------------------------------
+// Move player
+// --------------------------------------
+// Move player: attack only when stepping on another player's current position (head).
+bool TC_movePlayer(uint8_t id, int nx, int ny) {
+  if (!TC_players[id].alive) return false;
+  if (nx < 0 || ny < 0 || nx >= TC_MAP_W || ny >= TC_MAP_H) return false;
+
+  // Moving onto own tile is allowed (doesn't count as new)
+  if (TC_map[nx][ny] == id + 1) {
+    TC_players[id].x = nx;
+    TC_players[id].y = ny;
+    return true;
+  }
+
+  // Check if any alive player currently stands at (nx,ny)
+  int victim = -1;
+  for (int i = 0; i < 4; i++) {
+    if (i == id) continue;
+    if (TC_players[i].alive && TC_players[i].x == nx && TC_players[i].y == ny) {
+      victim = i;
+      break;
+    }
+  }
+
+  if (victim != -1) {
+    // Attack: victim dies, transfer all victim territory to attacker
+    TC_players[victim].alive = false;
+    for (int yy = 0; yy < TC_MAP_H; yy++) {
+      for (int xx = 0; xx < TC_MAP_W; xx++) {
+        if (TC_map[xx][yy] == (victim + 1)) TC_map[xx][yy] = id + 1;
+      }
+    }
+    // Move attacker onto victim position
+    TC_players[id].x = nx;
+    TC_players[id].y = ny;
+    TC_map[nx][ny] = id + 1;
+    return true;
+  }
+
+  // No player on cell. If cell owned by another player -> blocked
+  if (TC_map[nx][ny] != 0 && TC_map[nx][ny] != id + 1) return false;
+
+  // Empty cell -> move and claim
+  TC_players[id].x = nx;
+  TC_players[id].y = ny;
+  TC_map[nx][ny] = id + 1;
+  return true;
+}
+
+
+
+
+// --------------------------------------
+// Better bot AI: seeks nearest non-owned cell
+// --------------------------------------
+void TC_botMove(uint8_t id) {
+  if (!TC_players[id].alive) return;
+  int bx = TC_players[id].x;
+  int by = TC_players[id].y;
+
+  int dirs[4][2] = {{1,0},{-1,0},{0,1},{0,-1}};
+  int bestScore = -10000;
+  int bestX = bx, bestY = by;
+
+  for (int d = 0; d < 4; d++) {
+    int nx = bx + dirs[d][0];
+    int ny = by + dirs[d][1];
+    if (nx < 0 || ny < 0 || nx >= TC_MAP_W || ny >= TC_MAP_H) continue;
+
+    // If a player stands there -> high priority (attack)
+    int victim = -1;
+    for (int p = 0; p < 4; p++) {
+      if (p == id) continue;
+      if (TC_players[p].alive && TC_players[p].x == nx && TC_players[p].y == ny) {
+        victim = p; break;
+      }
+    }
+    if (victim != -1) {
+      // Attack score high, but account for danger after attack (neighbors)
+      int score = 100;
+      // Penalize if after moving there it will be surrounded by many enemies
+      int danger = 0;
+      for (int k = 0; k < 4; k++) {
+        int ex = nx + dirs[k][0], ey = ny + dirs[k][1];
+        if (ex < 0 || ey < 0 || ex >= TC_MAP_W || ey >= TC_MAP_H) continue;
+        uint8_t owner = TC_map[ex][ey];
+        if (owner != 0 && owner != id+1) danger++;
+      }
+      score -= danger * 10;
+      if (score > bestScore) { bestScore = score; bestX = nx; bestY = ny; }
+      continue;
+    }
+
+    // If cell empty -> good
+    if (TC_map[nx][ny] == 0) {
+      int score = 20;
+      // Prefer cells with many adjacent own cells (expand contiguous territory)
+      int adjOwn = 0, adjEnemy = 0;
+      for (int k = 0; k < 4; k++) {
+        int ex = nx + dirs[k][0], ey = ny + dirs[k][1];
+        if (ex < 0 || ey < 0 || ex >= TC_MAP_W || ey >= TC_MAP_H) continue;
+        uint8_t owner = TC_map[ex][ey];
+        if (owner == id+1) adjOwn++;
+        else if (owner != 0) adjEnemy++;
+      }
+      score += adjOwn * 8;
+      score -= adjEnemy * 5; // avoid near big enemy presence
+      // Danger heuristic: avoid cells that have many enemy neighbors
+      int danger = 0;
+      for (int k = 0; k < 4; k++) {
+        int ex = nx + dirs[k][0], ey = ny + dirs[k][1];
+        if (ex < 0 || ey < 0 || ex >= TC_MAP_W || ey >= TC_MAP_H) continue;
+        uint8_t owner = TC_map[ex][ey];
+        if (owner != 0 && owner != id+1) danger++;
+      }
+      score -= danger * 6;
+      if (score > bestScore) { bestScore = score; bestX = nx; bestY = ny; }
+      continue;
+    }
+
+    // If cell is someone else's territory but no player standing there -> cannot move
+    // so we give it very low score (skip)
+  }
+
+  // Make move if chosen differs
+  if (bestX != bx || bestY != by) {
+    TC_movePlayer(id, bestX, bestY);
+  }
+}
+
+
+
+// --------------------------------------
+// Check winner
+// --------------------------------------
+int TC_checkWinner() {
+  int aliveCount = 0;
+  int lastAlive = -1;
+
+  // Підрахунок живих
+  for (int i = 0; i < 4; i++) {
+    if (TC_players[i].alive) {
+      aliveCount++;
+      lastAlive = i;
+    }
+  }
+
+  // Якщо лишився один живий гравець → він переможець
+  if (aliveCount == 1) return lastAlive;
+
+  // Якщо живих немає або всі заблоковані → переможець за максимальною територією
+  bool anyMove = false;
+  for (int i = 0; i < 4; i++) {
+    if (!TC_players[i].alive) continue;
+    int x = TC_players[i].x;
+    int y = TC_players[i].y;
+    int dirs[4][2] = {{1,0},{-1,0},{0,1},{0,-1}};
+    for (int d = 0; d < 4; d++) {
+      int nx = x + dirs[d][0];
+      int ny = y + dirs[d][1];
+      if (nx < 0 || ny < 0 || nx >= TC_MAP_W || ny >= TC_MAP_H) continue;
+      uint8_t cell = TC_map[nx][ny];
+      // Якщо є хоча б один можливий хід (вільна клітинка або чужа голова)
+      bool canMove = false;
+      if (cell == 0) canMove = true;
+      for (int j = 0; j < 4; j++) {
+        if (j == i) continue;
+        if (TC_players[j].alive && TC_players[j].x == nx && TC_players[j].y == ny) canMove = true;
+      }
+      if (canMove) { anyMove = true; break; }
+    }
+    if (anyMove) break;
+  }
+
+  // Якщо є хоча б один можливий хід → гра продовжується
+  if (anyMove) return -1;
+
+  // Всі застрягли → підрахунок території
+  int maxArea = -1;
+  int winner = -1;
+  for (int i = 0; i < 4; i++) {
+    if (!TC_players[i].alive && TC_players[i].human == false) continue; // тільки живі
+    int area = 0;
+    for (int y = 0; y < TC_MAP_H; y++) {
+      for (int x = 0; x < TC_MAP_W; x++) {
+        if (TC_map[x][y] == i+1) area++;
+      }
+    }
+    if (area > maxArea) {
+      maxArea = area;
+      winner = i;
+    }
+  }
+
+  return winner;
+}
+
+
+// --------------------------------------
+// MAIN GAME
+// --------------------------------------
+void TC_start(uint8_t numHumans) {
+  if (numHumans < 1) numHumans = 1;
+  if (numHumans > 4) numHumans = 4;
+  TC_numPlayers = 4;
+
+  TC_spawnPlayers(numHumans);
+  display.fillScreen(TFT_WHITE);
+  TC_drawFullMap();
+  TC_drawPlayersAndTurn();
+
+  while (true) {
+    TC_Player &p = TC_players[TC_currentPlayer];
+    if (!p.alive) {
+      TC_currentPlayer = (TC_currentPlayer + 1) % 4;
+      continue;
+    }
+
+    // clear turn area before new move
+    display.fillRect(0, 0, 540, 40, TFT_WHITE);
+    TC_drawPlayersAndTurn();
+
+    if (p.human) {
+      uint16_t x, y;
+      if (display.getTouch(&x, &y)) {
+        if (x < 20 && y < 20) {
+          display.fillScreen(TFT_WHITE);
+          display.drawString("Exit", 250, 250);
+          display.display();
+          break;
+        }
+
+        int cellX = x / TC_CELL_SIZE;
+        int cellY = (y - TC_MAP_TOP) / TC_CELL_SIZE;
+        if (cellY < 0 || cellY >= TC_MAP_H) continue;
+
+        int dx = cellX - p.x;
+        int dy = cellY - p.y;
+        if (abs(dx) + abs(dy) == 1) {
+          if (TC_movePlayer(TC_currentPlayer, cellX, cellY)) {
+            TC_drawCell(cellX, cellY, TC_map[cellX][cellY]);
+            TC_drawPlayersAndTurn();
+            TC_currentPlayer = (TC_currentPlayer + 1) % 4;
+          }
+        }
+      }
+    } else {
+      TC_botMove(TC_currentPlayer);
+      TC_drawFullMap();
+      TC_drawPlayersAndTurn();
+      TC_currentPlayer = (TC_currentPlayer + 1) % 4;
+      delay(300);
+    }
+
+    int w = TC_checkWinner();
+    if (w >= 0) {
+      delay(100);
+      display.fillScreen(TFT_WHITE);
+      display.setTextColor(TC_playerColors[w]);
+      display.drawString("Winner: " + String(TC_playerSymbols[w]), 200, 250);
+      display.display();
+      break;
+    }
+  }
+}
+
+
+//--- end ai code ---
+//--- ai code ---
+void CALC_start() {
+  display.fillScreen(TFT_WHITE);
+  const int W=540,H=960,TOP=320;
+  const int ROWS=5,COLS=4;
+  int keyW=W/COLS,keyH=(H-TOP)/ROWS;
+
+  String displayStr="0";
+  double currentValue=0;
+  char pendingOp=0;
+  bool enteringNumber=false;
+  bool lastWasOp=false;
+  bool extraMode=false;
+
+  // Кнопки калькулятора
+  const char* labels[ROWS][COLS]={
+    {"C","←","%","/"},
+    {"7","8","9","*"},
+    {"4","5","6","+"},
+    {"1","2","3","-"},
+    {"0",".","^","="}
+  };
+
+  auto drawKey=[&](int c,int r,const char* label){
+    int x=c*keyW, y=TOP+r*keyH;
+    display.fillRect(x,y,keyW,keyH,TFT_LIGHTGREY);
+    display.drawRect(x,y,keyW,keyH,TFT_BLACK);
+    display.setTextColor(TFT_BLACK);
+   // display.setTextDatum(textdatum_t::middle_center);
+    display.drawString(label,x+keyW/2,y+keyH/2);
+   // display.display(x,y,keyW,keyH);
+  };
+
+  for(int r=0;r<ROWS;r++)
+    for(int c=0;c<COLS;c++) drawKey(c,r,labels[r][c]);
+
+  // Додати стрілку Extra
+  int extraX=W-40, extraY=0, extraS=40;
+  display.fillRect(extraX,extraY,extraS,extraS,TFT_LIGHTGREY);
+  display.drawRect(extraX,extraY,extraS,extraS,TFT_BLACK);
+  display.drawString("→", extraX+extraS/2, extraY+extraS/2);
+ // display.display(extraX,extraY,extraS,extraS);
+
+  auto drawDisplay=[&](){
+    display.fillRect(0,0,W,TOP,TFT_WHITE);
+    display.setTextColor(TFT_BLACK);
+    display.setTextDatum(textdatum_t::middle_right);
+    display.drawString(displayStr,W-10,TOP/2);
+   // display.display(0,0,W,TOP);
+  };
+  drawDisplay();
+
+  auto strToDoubleSafe=[](String s){ return s.toFloat(); };
+  auto factorial=[](int n)->double{ double f=1; for(int i=2;i<=n;i++) f*=i; return f; };
+  auto applyOp=[&](char op,double val){
+    if(op==0) currentValue=val;
+    else if(op=='+') currentValue+=val;
+    else if(op=='-') currentValue-=val;
+    else if(op=='*') currentValue*=val;
+    else if(op=='/') if(val!=0) currentValue/=val;
+    else if(op=='^') currentValue = pow((double)currentValue, (double)val);
+    else if(op=='%') currentValue=currentValue*val/100.0;
+  };
+
+  while(true){
+    taskbar();
+    uint16_t tx,ty;
+    if(display.getTouch(&tx,&ty)){
+      delay(60);
+      // Exit top-left
+      if(tx<20 && ty<20){ display.fillScreen(TFT_WHITE); delay(100); return; }
+
+      // Extra button
+      if(tx>=extraX && tx<=extraX+extraS && ty>=extraY && ty<=extraY+extraS){
+        extraMode=true;
+        display.fillScreen(TFT_WHITE);
+        display.setTextDatum(textdatum_t::top_left);
+        display.drawString("Extra Functions:", 10, 10);
+        display.drawString("1: Ohm Law (V=I*R)",10,50);
+        display.drawString("2: Power (P=V*I)",10,90);
+        display.drawString("3: Battery %",10,130);
+        display.drawString("Tap number to select",10,170);
+   //     display.display();
+        while(extraMode){
+          if(display.getTouch(&tx,&ty)){
+            if(tx<20 && ty<20){ extraMode=false; display.fillScreen(TFT_WHITE); break; }
+            if(ty>40 && ty<80){ // Ohm Law
+              extraMode=false;
+              display.fillScreen(TFT_WHITE);
+              display.drawString("Ohm Law: V=I*R",10,10);
+              display.drawString("Enter knowns separated by ',' and '?' for unknown",10,50);
+              display.drawString("Format: V, I, R",10,90);
+      //        display.display();
+              // Введення з touch можна реалізувати через tap-to-digit або блок вводу (залишимо базу)
+              break;
+            } else if(ty>80 && ty<120){ // Power
+              extraMode=false;
+              display.fillScreen(TFT_WHITE);
+              display.drawString("Power: P=V*I",10,10);
+              display.drawString("Enter knowns separated by ',' and '?' for unknown",10,50);
+              display.drawString("Format: P, V, I",10,90);
+      //        display.display();
+              break;
+            } else if(ty>120 && ty<160){ // Battery %
+              extraMode=false;
+              display.fillScreen(TFT_WHITE);
+              display.drawString("Battery % = (Cur-min)/(max-min)*100",10,10);
+              display.drawString("Enter values: Cur, Min, Max",10,50);
+       //       display.display();
+              break;
+            }
+          }
+          delay(50);
+        }
+      }
+
+      if(!extraMode){
+        int col=tx/keyW,row=(ty-TOP)/keyH;
+        if(row>=0 && row<ROWS && col>=0 && col<COLS){
+          const char* key = labels[row][col];
+          String k = String(key);
+
+          if(k=="C"){ displayStr="0"; currentValue=0; pendingOp=0; enteringNumber=false; lastWasOp=false; }
+          else if(k=="←"){ if(displayStr.length()>1) displayStr.remove(displayStr.length()-1); else displayStr="0"; }
+          else if(k=="." ){ if(displayStr.indexOf('.')==-1) displayStr+='.'; enteringNumber=true; }
+          else if(k=="+"||k=="-"||k=="*"||k=="/"||k=="^"||k=="%"){
+            double val=strToDoubleSafe(displayStr);
+            if(!lastWasOp){
+              if(pendingOp!=0) applyOp(pendingOp,val);
+              else currentValue=val;
+              displayStr=String(currentValue);
+              enteringNumber=false;
+            }
+            pendingOp=k[0]; lastWasOp=true;
+          }
+          else if(k=="!"){ double val=strToDoubleSafe(displayStr); displayStr=String(factorial((int)val)); enteringNumber=false; lastWasOp=false; }
+          else if(k=="="){
+            double val=strToDoubleSafe(displayStr);
+            if(pendingOp!=0) applyOp(pendingOp,val);
+            displayStr=String(currentValue);
+            pendingOp=0; enteringNumber=false; lastWasOp=false;
+          }
+          else { // digits
+            if(!enteringNumber){ displayStr=k; enteringNumber=true; lastWasOp=false; }
+            else displayStr=(displayStr=="0")? k : displayStr+k;
+          }
+          drawDisplay();
+        }
+      }
+    }
+    delay(50);
+  }
+  return;
+}
+
+//--- end ai code ---
+
+void buzzertest(){
+  delay(2000);
+  tone(BUZZER_PIN, 800, 200);
+  delay(250);
+  tone(BUZZER_PIN, 600, 200);
+  delay(250);
+  tone(BUZZER_PIN, 800, 200);
+  delay(250);
+  noTone(BUZZER_PIN);
+  delay(250);
+  tone(BUZZER_PIN, 400, 200);
+  delay(250);
+  noTone(BUZZER_PIN);
+}
+
+
+
+
+
 
 // ------------------ Setup / Loop --------------------
 void setup() {
