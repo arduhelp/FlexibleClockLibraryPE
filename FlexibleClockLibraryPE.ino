@@ -34,6 +34,8 @@ const char* WallpaperURL = "http://192.168.0.100:8000/image.jpg"; //example: "ht
 
 M5GFX display;
 String FCLver = "v1.1s9 m5paper";
+const char *configDir = "/sys/config";
+
 
 int tx, ty;
 int x, y;
@@ -8717,8 +8719,9 @@ void drawJPGfromURL(const char* url, int x, int y) {
 }
 //--- end AI code 60% ---
 //--- ai codee ---
-// --- Ініціалізація SD ---
+// --- Ініціалізація SDinit ---
 bool SD_begin() {
+    display.setCursor(10, 10);
     SPI.begin(SD_SPI_SCK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_CS_PIN);
     delay(100);
     SD.begin(SD_SPI_CS_PIN, SPI, 25000000);
@@ -8734,7 +8737,9 @@ bool SD_begin() {
 
 
 //--- end ai code ---
+String sd_info;
 void SD_info() {
+    display.setCursor(10, 50);
     uint8_t type = SD.cardType();
     if(type == CARD_NONE) {
         display.println("No SD card inserted!");
@@ -8756,6 +8761,13 @@ void SD_info() {
     // Місце зайнято/вільне
     uint64_t used = SD.usedBytes() / (1024 * 1024);
     Serial.printf("Used: %llu MB\n", used);
+
+    // Обчислення відсотка зайнятого місця
+    float percent = (float)used / (float)sizeMB * 100.0;
+
+    // Формування рядка з інформацією
+    sd_info = "used: " + String(used) + " / " + String(sizeMB) + " MB (" + String(percent, 1) + "%)";
+    Serial.println(sd_info);
 }
 
 
@@ -8776,6 +8788,8 @@ struct Button {
   const unsigned char* icon;
   ButtonCallback callback;
 };
+
+
 
 // ----------------- Прототипи ------------------
 void LockApp();
@@ -8801,6 +8815,8 @@ void eBoard();
 void CheckersGame();
 void generateWorld(int seed, int width, int height);
 void drawPixele(int x, int y, uint16_t color);
+void mainGame(int seed, bool loadFromFile);
+
 
 // ------------------ Масив кнопок --------------------
 Button buttons[] = {
@@ -8933,6 +8949,54 @@ void taskbar(){ //----opti----
 }
 
 
+bool alertBox(String text, String icon = "!", bool hasCancel = true) {
+    int16_t x, y;
+    display.fillRect(60, 150, 420, 240, TFT_WHITE);
+    display.drawRect(60, 150, 420, 240, TFT_BLACK);
+
+    // --- Іконка ---
+    display.setTextColor(TFT_RED);
+    display.setTextSize(3);
+    display.setCursor(90, 250);
+    display.print(icon);
+
+    // --- Текст ---
+    display.setTextColor(TFT_BLACK);
+    display.setTextSize(1);
+    display.setCursor(150, 200);
+    display.println(text);
+
+    // --- Кнопки ---
+    int okX = 150, okY = 320, okW = 100, okH = 40;
+    int cancelX = 310, cancelY = 320, cancelW = 100, cancelH = 40;
+
+    // Малюємо кнопки
+    display.drawRoundRect(okX, okY, okW, okH, 10, TFT_BLACK);
+    display.setCursor(okX + 30, okY + 35);
+    display.print("OK");
+
+    if (hasCancel) {
+        display.drawRoundRect(cancelX, cancelY, cancelW, cancelH, 10, TFT_BLACK);
+        display.setCursor(cancelX + 10, cancelY + 35);
+        display.print("Cancel");
+    }
+
+    display.display();
+
+    // --- Очікуємо дотику ---
+    while (true) {
+        if (display.getTouch(&x, &y)) {
+            if (x > okX && x < okX + okW && y > okY && y < okY + okH) {
+                // OK натиснуто
+                return true;
+            }
+            if (hasCancel && x > cancelX && x < cancelX + cancelW && y > cancelY && y < cancelY + cancelH) {
+                // Cancel натиснуто
+                return false;
+            }
+        }
+    }
+}
 
 
 
@@ -8988,13 +9052,37 @@ String currentPath = "/";
 void openTERMINALApp(){
   while (true){
     String cmd = showSimpleKeyboard(display);
+    if(cmd == "/beacon"){wifi_beacon_flooder();}
+    if(cmd == "/paint"){openPaintApp();}
+    if(cmd == "/bj21"){Blackjack21();}
+    if(cmd == "/tt"){TouchTest();}
+    if(cmd == "/ta"){TestAnimation();}
+    if(cmd == "/ed"){eBoard();}
+    if(cmd == "/gw"){gameMenu();}
+    if(cmd == "/ns"){HX_runNetworkMonitor();}
+    if(cmd == "/tc1"){TC_start(1);}
+    if(cmd == "/tc2"){TC_start(2);}
+    if(cmd == "/tc3"){TC_start(3);}
+    if(cmd == "/tc4"){TC_start(4);}
+    if(cmd == "/c"){CALC_start();}
+    if(cmd == "/b"){buzzertest();}
+    if(cmd == "/sd"){if(SD_begin()) {SD_info();} }
+    if(cmd == "/fs"){FS_visual(); }
+    if(cmd == "/t"){if(alertBox("Test?", "!", true)){display.println("OK");}else{display.println("no OK");} }
+    if(cmd == "q")return;
+    if(cmd == "")return;
+
+
+
+
+    
 
     // --- SD навігація ai code ---
     if(cmd == "ls") {
       File dir = SD.open(currentPath);
       File file = dir.openNextFile();
       display.fillScreen(TFT_WHITE);
-      display.setCursor(0,0);
+      display.setCursor(0,20);
       while(file){
         display.println(file.name());
         file = dir.openNextFile();
@@ -9019,7 +9107,7 @@ void openTERMINALApp(){
           currentPath = newPath;
         } else {
           display.fillScreen(TFT_WHITE);
-          display.setCursor(0,0);
+          display.setCursor(0,20);
           display.println("Folder not found!");
           display.display();
         }
@@ -9032,18 +9120,18 @@ void openTERMINALApp(){
       String newPath = currentPath + "/" + folderName;
       if(SD.exists(newPath)){
         display.fillScreen(TFT_WHITE);
-        display.setCursor(0,0);
+        display.setCursor(0,20);
         display.println("Folder already exists!");
         display.display();
       } else {
         if(SD.mkdir(newPath)){
           display.fillScreen(TFT_WHITE);
-          display.setCursor(0,0);
+          display.setCursor(0,20);
           display.println("Folder created!");
           display.display();
         } else {
           display.fillScreen(TFT_WHITE);
-          display.setCursor(0,0);
+          display.setCursor(0,20);
           display.println("Error creating folder!");
           display.display();
         }
@@ -9056,7 +9144,7 @@ void openTERMINALApp(){
       String path = currentPath + "/" + filename;
       if(SD.exists(path)){
         display.fillScreen(TFT_WHITE);
-        display.setCursor(0,0);
+        display.setCursor(0,20);
         display.println("File already exists!");
         display.display();
       } else {
@@ -9064,12 +9152,12 @@ void openTERMINALApp(){
         if(f){
           f.close();
           display.fillScreen(TFT_WHITE);
-          display.setCursor(0,0);
+          display.setCursor(0,20);
           display.println("File created!");
           display.display();
         } else {
           display.fillScreen(TFT_WHITE);
-          display.setCursor(0,0);
+          display.setCursor(0,20);
           display.println("Error creating file!");
           display.display();
         }
@@ -9083,7 +9171,7 @@ void openTERMINALApp(){
       String path = currentPath + "/" + filename;
       if(!SD.exists(path)){
         display.fillScreen(TFT_WHITE);
-        display.setCursor(0,0);
+        display.setCursor(0,20);
         display.println("File not found!");
         display.display();
       } else {
@@ -9105,23 +9193,7 @@ void openTERMINALApp(){
 
 
     
-    if(cmd == "/beacon"){wifi_beacon_flooder();}
-    if(cmd == "/paint"){openPaintApp();}
-    if(cmd == "/bj21"){Blackjack21();}
-    if(cmd == "/tt"){TouchTest();}
-    if(cmd == "/ta"){TestAnimation();}
-    if(cmd == "/ed"){eBoard();}
-    if(cmd == "/gw"){mainGame(123456);}
-    if(cmd == "/tc1"){TC_start(1);}
-    if(cmd == "/tc2"){TC_start(2);}
-    if(cmd == "/tc3"){TC_start(3);}
-    if(cmd == "/tc4"){TC_start(4);}
-    if(cmd == "/c"){CALC_start();}
-    if(cmd == "/b"){buzzertest();}
-    if(cmd == "/sd"){if(SD_begin()) {SD_info();} }
-    if(cmd == "/fs"){FS_visualbeta(); }
-    if(cmd == "q")return;
-    if(cmd == "")return;
+   
     }
   }
 
@@ -9509,6 +9581,128 @@ void drawBlock(int gx,int gy){
   display.fillRect(gx*BLOCK_SIZE, gy*BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE, mapColors[gx][gy]);
 }
 
+
+
+// --- головне меню гри ---
+void drawMenu() {
+    display.clear(TFT_WHITE);
+    display.setTextColor(TFT_BLACK);
+    display.setRotation(1);
+    //display.setTextSize(2);
+    display.drawString("MainCraft Menu", SCREEN_W/2 - 60, 40);
+
+    // кнопки
+    display.fillRect(SCREEN_W/2 - 100, 120, 200, 50, 0x7BEF); // згенерувати
+    display.drawString("Generate", SCREEN_W/2 - 20, 155);
+
+    display.fillRect(SCREEN_W/2 - 100, 200, 200, 50, 0x7BEF); // завантажити
+    display.drawString("Load from SD", SCREEN_W/2 - 10, 235);
+
+    display.fillRect(SCREEN_W/2 - 100, 280, 200, 50, 0x7BEF); // вийти
+    display.drawString("Exit", SCREEN_W/2 , 315);
+
+    display.display();
+}
+
+void gameMenu() {
+    drawMenu();
+
+    while(true) {
+        int tx, ty;
+        if(display.getTouch(&tx, &ty)) {
+            // Generate
+            if(tx > SCREEN_W/2 - 100 && tx < SCREEN_W/2 + 100 &&
+               ty > 120 && ty < 170) {
+                int seede = millis();
+                display.clear(TFT_WHITE);
+                mainGame(seede, false);
+                //drawMenu();
+                
+            }
+
+            // Load
+            if(tx > SCREEN_W/2 - 100 && tx < SCREEN_W/2 + 100 &&
+               ty > 200 && ty < 250) {
+                if(loadWorld()) {
+                    display.clear(TFT_WHITE);
+                    delay(500);
+                    mainGame(0, true); // seed ігнорується, завантажуємо зі SD // старт з карти
+                } else {
+                    display.drawString("No save found!", SCREEN_W/2 - 30, 400);
+                    delay(1500);
+                    drawMenu();
+                    
+                }
+            }
+
+            // Exit
+            if(tx > SCREEN_W/2 - 100 && tx < SCREEN_W/2 + 100 &&
+               ty > 280 && ty < 330) {
+                display.clear(TFT_WHITE);
+                display.drawString("Goodbye!", SCREEN_W/2 - 40, SCREEN_H/2);
+                display.display();
+                delay(1000);
+                 display.setRotation(0);
+                return;
+            }
+
+            delay(300);
+        }
+    }
+}
+void saveWorld() {
+    if (!SD.cardSize()) return; // немає карти
+    if (!SD.exists("/sys/saves")) return;
+
+    File f = SD.open("/sys/saves/world.dat", FILE_WRITE);
+    if (!f) return;
+
+    for(int y=0; y<gridH(); y++){
+        for(int x=0; x<gridW(); x++){
+            f.write((byte)tiles[x][y]);
+        }
+    }
+    f.write((byte)playerX);
+    f.write((byte)playerY);
+    f.close();
+}
+bool loadWorld() {
+    if (!SD.cardSize()) return false;
+    if (!SD.exists("/sys/saves/world.dat")) return false;
+
+    File f = SD.open("/sys/saves/world.dat", FILE_READ);
+    if (!f) return false;
+
+    for(int y=0; y<gridH(); y++){
+        for(int x=0; x<gridW(); x++){
+            if (!f.available()) { f.close(); return false; }
+            tiles[x][y] = (TileType)f.read();
+            switch(tiles[x][y]){
+                case T_WATER: mapColors[x][y]=0x001F; break;
+                case T_GRASS: mapColors[x][y]=0x07E0; break;
+                case T_MOUNTAIN: mapColors[x][y]=0x7BE0; break;
+                case T_TREE: mapColors[x][y]=0x03E0; break;
+                case T_IRON: mapColors[x][y]=0xFFFF; break;
+                case T_STONE: mapColors[x][y]=0x4208; break;
+            }
+            drawBlock(x, y);
+        }
+    }
+    playerX = f.read();
+    playerY = f.read();
+    playerFX = playerX;
+    playerFY = playerY;
+    targetX = playerX;
+    targetY = playerY;
+    f.close();
+    return true;
+}
+
+
+
+
+
+
 // --- малювання гравця ---
 int prevPlayerX = -1;
 int prevPlayerY = -1;
@@ -9648,6 +9842,7 @@ void generateWorld(int seed){
       drawBlock(gx,gy);
       delay(1);
     }
+    
   }
 
   // старт гравця
@@ -9750,52 +9945,491 @@ void drawInventory() {
 
 
 
-// --- головна функція ---
-void mainGame(int seed){
-  generateWorld(seed);
 
-  while(true){
-    int tx, ty;
-    if(display.getTouch(&tx, &ty)){
-        // спочатку перевіряємо інвентар
-        int slotW = 30, slotH = 30;
-        int startX = SCREEN_W - INV_SLOTS*slotW - 5;
-        int startY = 10;
 
-        bool touchedInventory = false;
-        for(int i=0;i<INV_SLOTS;i++){
-            if(tx >= startX + i*slotW && tx < startX + (i+1)*slotW &&
-               ty >= startY && ty < startY + slotH){
-                handleInventoryTouch(tx, ty); // обробка натискання на слот
-                touchedInventory = true;
-                break;
-            }
+
+void mainGame(int seed, bool loadFromFile=false) {
+    if(!loadFromFile){
+        generateWorld(seed); // генеруємо лише новий світ
+    } else {
+        if(!loadWorld()){
+            generateWorld(seed); // якщо файл не знайдено, тоді генерація
         }
-
-        // якщо не інвентар — рухаємо гравця
-        if(!touchedInventory){
-            int gx = tx / BLOCK_SIZE;
-            int gy = ty / BLOCK_SIZE;
-            if(gx>=0 && gy>=0 && gx<gridW() && gy<gridH()){
-                targetX = gx;
-                targetY = gy;
-            }
-        }
-
-        delay(100);
     }
 
-    updatePlayer();
-    drawInventory();
-    delay(30);
+    // кнопки руху — для відображення
+    int btnSize = 40;
+    int baseY = SCREEN_H - 100;
+
+    display.setTextColor(TFT_BLACK);
+    display.setTextSize(1);
+
+    // Малюємо кнопки управління
+    display.fillRect(20, baseY, btnSize, btnSize, 0x7BEF);          // ←
+    display.fillRect(100, baseY, btnSize, btnSize, 0x7BEF);         // →
+    display.fillRect(60, baseY - 50, btnSize, btnSize, 0x7BEF);     // ↑
+    display.fillRect(60, baseY + 50, btnSize, btnSize, 0x7BEF);     // ↓
+    display.drawString("<", 40, baseY + 20);
+    display.drawString(">", 120, baseY + 20);
+    display.drawString("^", 80, baseY - 40);
+    display.drawString("v", 80, baseY + 80);
+
+    // кнопка SAVE (зберегти світ)
+    display.fillRect(SCREEN_W - 100, SCREEN_H - 60, 80, 40, 0xFFE0);
+    display.drawString("SAVE", SCREEN_W - 80, SCREEN_H - 45);
+
+    display.display();
+
+    while (true) {
+        int tx, ty;
+        if (display.getTouch(&tx, &ty)) {
+            // ===== КНОПКИ РУХУ =====
+            if (tx > 20 && tx < 20 + btnSize && ty > baseY && ty < baseY + btnSize) {
+                targetX = playerX - 1; // ←
+            }
+            else if (tx > 100 && tx < 100 + btnSize && ty > baseY && ty < baseY + btnSize) {
+                targetX = playerX + 1; // →
+            }
+            else if (tx > 60 && tx < 60 + btnSize && ty > baseY - 60 && ty < baseY - 60 + btnSize) {
+                targetY = playerY - 1; // ↑
+            }
+            else if (tx > 60 && tx < 60 + btnSize && ty > baseY + 60 && ty < baseY + 60 + btnSize) {
+                targetY = playerY + 1; // ↓
+            }
+
+            // ===== КНОПКА SAVE =====
+            else if (tx > SCREEN_W - 100 && tx < SCREEN_W - 20 &&
+                     ty > SCREEN_H - 60 && ty < SCREEN_H - 20) {
+                if (SD.cardSize() && SD.exists("/sys/saves")) {
+                    saveWorld();
+                    display.drawString("Saved!", SCREEN_W - 90, SCREEN_H - 80);
+                    display.display();
+                    delay(800);
+                    // прибираємо напис
+                    display.fillRect(SCREEN_W - 100, SCREEN_H - 90, 80, 20, 0xFFFF);
+                } else {
+                    display.drawString("No SD /sys/saves!", SCREEN_W - 150, SCREEN_H - 80);
+                    display.display();
+                    delay(1000);
+                    display.fillRect(SCREEN_W - 180, SCREEN_H - 90, 180, 20, 0xFFFF);
+                }
+            }
+
+            // ===== ІНВЕНТАР =====
+            else {
+                int slotW = 30, slotH = 30;
+                int startX = SCREEN_W - INV_SLOTS * slotW - 5;
+                int startY = 10;
+
+                bool touchedInventory = false;
+                for (int i = 0; i < INV_SLOTS; i++) {
+                    if (tx >= startX + i * slotW && tx < startX + (i + 1) * slotW &&
+                        ty >= startY && ty < startY + slotH) {
+                        handleInventoryTouch(tx, ty);
+                        touchedInventory = true;
+                        break;
+                    }
+                }
+
+                // ===== РУХ ПО КАРТІ =====
+                if (!touchedInventory) {
+                    int gx = tx / BLOCK_SIZE;
+                    int gy = ty / BLOCK_SIZE;
+                    if (gx >= 0 && gy >= 0 && gx < gridW() && gy < gridH()) {
+                        targetX = gx;
+                        targetY = gy;
+                    }
+                }
+            }
+
+            delay(120);
+        }
+
+        updatePlayer();
+        drawInventory();
+        delay(30);
+    }
 }
 
 
-}
 
 
 
 //--- end ai code ---
+
+
+
+
+
+
+
+
+// UI coordinates / sizes
+static const int HX_ARROW_W = 40;
+static const int HX_ARROW_H = 30;
+static const int HX_EXIT_MARGIN = 20;
+
+// settings for scanning hosts (approx)
+static const int HX_SCAN_MAX_HOSTS = 30;    // max hosts to probe in subnet (for speed)
+static const int HX_SCAN_PORT = 80;         // port to try for quick probe
+static const int HX_CONNECT_TIMEOUT_MS = 120; // timeout per probe (ms) - small for speed
+
+// Helper: draw left/right arrows and page
+static void HX_drawArrows(int cx, int cy) {
+  // left arrow area
+  int lx = 10, ly = cy;
+  display.fillTriangle(lx+HX_ARROW_W, ly-HX_ARROW_H/2, lx+HX_ARROW_W, ly+HX_ARROW_H/2, lx, ly, 0xFFFF);
+  // right arrow area
+  int rx = display.width() - 10, ry = cy;
+  display.fillTriangle(rx-HX_ARROW_W, ry-HX_ARROW_H/2, rx-HX_ARROW_W, ry+HX_ARROW_H/2, rx, ry, 0xFFFF);
+}
+
+// Helper: quick TCP probe to measure latency (approx) — returns ms or -1 on fail
+static long HX_tcpProbeLatency(IPAddress ip, uint16_t port, int timeoutMs) {
+  WiFiClient c;
+  unsigned long t0 = millis();
+  // attempt connect; connect will block but usually fast for closed ports; we guard with timeout loop
+  // Many cores support connect(IPAddress,port) returning bool; we'll attempt and then break by timeout if needed.
+  bool connected = false;
+  unsigned long start = millis();
+  // Try multiple short attempts until timeout to avoid long blocking
+  while (millis() - start < (unsigned long)timeoutMs) {
+    if (c.connect(ip, port)) { connected = true; break; }
+    delay(5);
+  }
+  if (!connected) { c.stop(); return -1; }
+  long dt = (long)(millis() - t0);
+  c.stop();
+  return dt;
+}
+
+// Helper: quick probe to check if host alive (returns true if connect succeeded within timeout)
+static bool HX_probeHost(IPAddress ip, uint16_t port, int timeoutMs) {
+  WiFiClient c;
+  unsigned long start = millis();
+  while (millis() - start < (unsigned long)timeoutMs) {
+    if (c.connect(ip, port)) { c.stop(); return true; }
+    delay(5);
+  }
+  c.stop();
+  return false;
+}
+
+double HX_getDistanceToRouter() {
+  if (WiFi.status() != WL_CONNECTED) return -1;
+
+  int rssi = WiFi.RSSI();  // поточний рівень сигналу
+  const double A = -45;    // RSSI при 1 метрі (орієнтовно)
+  const double n = 2.5;    // коеф. загасання (2-4 залежно від середовища)
+
+  double expo = (A - rssi) / (10.0 * n);
+  double distance = pow(10.0, expo);
+
+  // обмежуємо розумні межі
+  if (distance < 0.2) distance = 0.2;
+  if (distance > 50.0) distance = 50.0;
+  return distance;
+}
+
+// Таймаут підключення TCP (мс)
+#define HX_TCP_TIMEOUT 150
+// Максимальна кількість хостів у підмережі для сканування
+#define HX_TCP_MAX_HOSTS 110
+// Порт для пінгу (HTTP)
+#define HX_TCP_PORT 80
+
+// ===== Повертає затримку (ms) до ip або -1 при помилці =====
+long HX_pingHostTCP(IPAddress ip, uint16_t port = HX_TCP_PORT, uint32_t timeoutMs = HX_TCP_TIMEOUT) {
+  WiFiClient client;
+  uint32_t start = millis();
+  bool ok = client.connect(ip, port, timeoutMs);
+  long elapsed = millis() - start;
+  client.stop();
+  if (ok) return elapsed;
+  else return -1;
+}
+
+// ===== Повертає приблизну кількість пристроїв, які відповіли на TCP-пінг =====
+int HX_countDevicesTCP(int maxHosts = HX_TCP_MAX_HOSTS, uint32_t timeoutMs = HX_TCP_TIMEOUT, uint16_t port = HX_TCP_PORT) {
+  if (WiFi.status() != WL_CONNECTED) return -1;
+
+  IPAddress myIP = WiFi.localIP();
+  IPAddress gw = WiFi.gatewayIP();
+
+  uint8_t a = myIP[0], b = myIP[1], c = myIP[2];
+  int found = 0;
+  int probed = 0;
+
+  int start = random(1, 254);
+
+  for (int offset = 0; probed < maxHosts && offset < 254; ++offset) {
+    int host = (start + offset) % 254 + 1;
+    if (host == myIP[3]) continue;
+    IPAddress probe(a, b, c, host);
+    if (probe == gw) continue;
+
+    WiFiClient client;
+    uint32_t t0 = millis();
+    bool ok = client.connect(probe, port, timeoutMs);
+    if (ok) found++;
+    probed++;
+    client.stop();
+  }
+
+  return found;
+}
+
+
+String HX_getEncryption(uint8_t type) {
+  switch(type) {
+    case WIFI_AUTH_OPEN: return "None";
+    case WIFI_AUTH_WEP: return "WEP";
+    case WIFI_AUTH_WPA_PSK: return "WPA";
+    case WIFI_AUTH_WPA2_PSK: return "WPA2";
+    case WIFI_AUTH_WPA_WPA2_PSK: return "WPA/WPA2";
+    case WIFI_AUTH_WPA2_ENTERPRISE: return "WPA2E";
+    default: return "Unknown";
+  }
+}
+
+
+// --- Одна функція, що робить увесь монітор ---
+void HX_runNetworkMonitor() {
+  // prepare display
+  //display.init();
+  display.setTextColor(0x0000);
+
+  
+
+  // initial scan of WiFi networks
+  int netCount = WiFi.scanNetworks();
+  if (netCount < 0) netCount = 0;
+  int idx = 0;
+  if (netCount == 0) {
+    // show no networks found
+    display.fillScreen(0xFFFF);
+    display.setCursor(10, 20);
+    display.println("No WiFi networks found");
+    display.display();
+  }
+
+  // state for UI
+  bool exitRequested = false;
+  uint32_t lastUiRefresh = 0;
+  const uint32_t UI_REFRESH_MS = 500; // refresh rate for non-intensive updates
+  int displayedIndex = 0;
+
+  // Preload network info into arrays to avoid repeated calling inside main loop
+  struct NetInfo {
+    String ssid;
+    String bssid;
+    int32_t rssi;
+    int channel;
+    uint8_t enc;
+  };
+  static NetInfo nets[64];
+  int netsAvailable = min(netCount, 64);
+  for (int i = 0; i < netsAvailable; ++i) {
+    nets[i].ssid = WiFi.SSID(i);
+    nets[i].bssid = WiFi.BSSIDstr(i);
+    nets[i].rssi = WiFi.RSSI(i);
+    nets[i].channel = WiFi.channel(i);
+    nets[i].enc = WiFi.encryptionType(i);
+  }
+
+  // UI touch tracking
+  int lastTouchX = -1, lastTouchY = -1;
+  uint32_t lastTouchTime = 0;
+
+  // main interactive loop (single function)
+  while (!exitRequested) {
+    // handle touch input (non-blocking)
+    int tx, ty;
+    bool touched = display.getTouch(&tx, &ty);
+
+    if (touched) {
+      lastTouchX = tx; lastTouchY = ty; lastTouchTime = millis();
+      // exit area: top-left corner x<20 && y<20
+      if (tx < HX_EXIT_MARGIN && ty < HX_EXIT_MARGIN) {
+        exitRequested = true;
+        break;
+      }
+      // left/right arrows areas
+      if (tx < 60) { // left arrow pressed - prev network
+        displayedIndex = (displayedIndex - 1 + netsAvailable) % max(1, netsAvailable);
+        // tiny visual feedback
+        display.fillRect(0, 0, 60, 40, 0xFFFF);
+        display.setCursor(6, 8); display.setTextSize(2); display.setTextColor(0x0000);
+        display.println("<");
+        display.display();
+        delay(150);
+      } else if (tx > display.width() - 60) { // right arrow
+        displayedIndex = (displayedIndex + 1) % max(1, netsAvailable);
+        display.fillRect(display.width()-60, 0, 60, 40, 0xFFFF);
+        display.setCursor(display.width()-50, 8); display.setTextSize(2); display.setTextColor(0x0000);
+        display.println(">");
+        display.display();
+        delay(150);
+      } else {
+        // touched center area - we will try to show more details (handled by refresh below)
+      }
+    }
+
+    // handle rescan gesture: long press center area (>800ms) triggers re-scan
+    if (touched && (millis() - lastTouchTime > 800) && (tx > 60 && tx < display.width() - 60) ) {
+      // rescan networks
+      display.fillScreen(0x0000);
+      display.setCursor(10, 20);
+      display.println("Rescanning...");
+      display.display();
+      delay(200);
+      netCount = WiFi.scanNetworks(true,true); // async? if not available, fallback to sync
+      if (netCount < 0) netCount = WiFi.scanNetworks(); // fallback
+      netsAvailable = min(netCount, 64);
+      for (int i = 0; i < netsAvailable; ++i) {
+        nets[i].ssid = WiFi.SSID(i);
+        nets[i].bssid = WiFi.BSSIDstr(i);
+        nets[i].rssi = WiFi.RSSI(i);
+        nets[i].channel = WiFi.channel(i);
+        nets[i].enc = WiFi.encryptionType(i);
+      }
+      displayedIndex = 0;
+      lastUiRefresh = 0;
+    }
+
+    // regular display refresh (throttled)
+    if (millis() - lastUiRefresh > UI_REFRESH_MS) {
+      lastUiRefresh = millis();
+
+      display.fillScreen(0xFFFF);
+      display.setTextColor(0x0000);
+      display.setTextSize(2);
+
+      // header: title + exit hint
+      display.setCursor(8, 6);
+      display.println("Network Monitor");
+      display.setTextSize(1);
+      display.setCursor(8, 28);
+      display.print("Networks: "); display.println(netsAvailable);
+
+      if (netsAvailable == 0) {
+        display.setCursor(8, 48);
+        display.println("No networks found");
+        display.display();
+        continue;
+      }
+
+      // pick current network to display
+      int i = displayedIndex % netsAvailable;
+      display.setTextSize(2);
+      display.setCursor(8, 78);
+      display.print("SSID: ");
+      display.setTextSize(2);
+      display.println(nets[i].ssid);
+
+      display.setTextSize(1);
+      display.setCursor(8, 122);
+      display.print("BSSID: "); display.println(nets[i].bssid);
+
+      display.setCursor(8, 142);
+      display.print("RSSI: "); display.print(nets[i].rssi);
+      display.print(" dBm   Ch: "); display.println(nets[i].channel);
+
+      display.setCursor(8, 162);
+      String enc = HX_getEncryption(nets[i].enc);
+      display.print("Enc: "); display.println(enc);
+
+      // If we are currently associated to some WiFi, show IP/mask/gateway and attempt latency/ping to gateway
+      if (WiFi.status() == WL_CONNECTED) {
+        IPAddress ip = WiFi.localIP();
+        IPAddress gw = WiFi.gatewayIP();
+        IPAddress mask = WiFi.subnetMask();
+        display.setCursor(8, 182);
+        display.print("IP: "); display.println(ip.toString());
+        display.setCursor(8, 202);
+        display.print("Mask: "); display.println(mask.toString());
+        display.setCursor(8, 222);
+        display.print("GW: "); display.println(gw.toString());
+
+        // latency to GW (approx) via TCP connect timing
+        double dist = HX_getDistanceToRouter();
+        int devices = HX_countDevicesTCP(10, 120, 80); // скануємо 30 хостів, timeout 120ms
+        long lat = HX_tcpProbeLatency(gw, HX_SCAN_PORT, 300);
+        display.setCursor(8, 242);
+        display.print("GW latency: ");
+        if (lat < 0) display.println("N/A");
+        else {
+          display.print(lat); display.println(" ms");
+        }
+      display.setCursor(8, 282);
+      display.print("Devices ~"); display.println(devices);
+
+      display.setCursor(8, 302);
+      display.print("Dist ~"); display.print(dist, 1); display.println(" m");
+        // approximate device count: probe a limited set of hosts in the local subnet
+        // build network base from IP & mask; probe up to HX_SCAN_MAX_HOSTS addresses starting after gateway
+        uint32_t ip32 = (uint32_t)ip;
+        uint32_t mask32 = (uint32_t)mask;
+        uint32_t netbase = ip32 & mask32;
+        uint32_t hostpartStart = (netbase & ~mask32) + 1;
+        // iterate through some hosts
+        int found = 0;
+        int probes = 0;
+        // choose a start offset to scatter probes across subnet for better sampling
+        uint32_t startOffset = (uint32_t)(random(1, 254));
+        for (uint32_t off = startOffset; probes < HX_SCAN_MAX_HOSTS && off < 255+startOffset; ++off) {
+          uint8_t oct = (uint8_t)(off % 254 + 1);
+          IPAddress probeIP = IPAddress((netbase & 0xFF), ((netbase>>8)&0xFF), ((netbase>>16)&0xFF), ((netbase>>24)&0xFF));
+          // create proper host candidate by replacing lowest octet (works for /24 common masks)
+          // For non-/24 masks this is approximate — we keep it simple and probe addresses near our IP
+          uint8_t a = (uint8_t)( (ip32      ) & 0xFF);
+          uint8_t b = (uint8_t)( (ip32>>8 ) & 0xFF);
+          uint8_t c = (uint8_t)( (ip32>>16) & 0xFF);
+          uint8_t d = oct;
+          probeIP = IPAddress(a,b,c,d);
+
+          // skip our own IP and gateway quickly
+          if (probeIP == ip || probeIP == WiFi.gatewayIP()) { probes++; continue; }
+
+          // quick probe (port 80) — if host accepts, count it
+          if (HX_probeHost(probeIP, HX_SCAN_PORT, HX_CONNECT_TIMEOUT_MS)) found++;
+          probes++;
+        }
+
+        display.setCursor(8, 262);
+        display.print("Approx devices: "); display.print(found);
+        display.print(" / probed "); display.println(probes);
+      } else {
+        display.setCursor(8, 322);
+        display.println("Not connected to WiFi (no IP)");
+      }
+
+      // draw arrows and exit hint
+      HX_drawArrows(display.width()/2, display.height() - 20);
+      display.setCursor(4, 4);
+      display.setTextSize(1);
+      
+
+      display.display();
+    } // end UI refresh
+
+    // short delay to yield
+    delay(20);
+  } // end while
+
+  // when exit requested, clear screen and return
+  display.fillScreen(0xFFFF);
+  display.setCursor(10, 30);
+  display.setTextSize(1);
+  display.println("Exited monitor");
+  display.display();
+  delay(300);
+}
+
+
+
+
+
 
 
 
@@ -10305,6 +10939,200 @@ void TouchTest() {
     delay(30);
   }
 }
+// ------------------------
+// Text file viewer (paginated, low RAM)
+// ------------------------
+void FS_showTextFile(String fullPath) {
+  const int W = 540;   // дисплей (адаптуй якщо потрібно)
+  const int H = 960;
+  const int marginX = 8;
+  const int marginY = 8;
+  const int footerH = 40; // місце для кнопок/індикації
+  const int textSize = 1; // підіймай/занижуй за потреби
+  const int lineHeight = 20; // приблизний розмір рядка в px при textSize=2 (підправ під свій шрифт)
+  const int maxLinesPerPage = (H - marginY*2 - footerH) / lineHeight;
+  const int charWidthApprox = 8 * textSize; // приблизно
+  const int maxCharsPerLine = max(20, W / charWidthApprox - 2);
+
+  File f = SD.open(fullPath, FILE_READ);
+  if (!f) {
+    // неможливо відкрити
+    display.fillScreen(TFT_WHITE);
+    display.setCursor(10, 10);
+    display.setTextColor(TFT_BLACK);
+    display.println("Cannot open file!");
+    display.display();
+    delay(800);
+    return;
+  }
+
+  // Зчитуємо файл у вектор сторінок, але не у пам'ять повністю.
+  // Логіка: прочитати і заповнити поточну сторінку; зберігати позиції початку сторінок у масиві (offsets),
+  // щоб можна було повертатись назад без перезапуску файлу з початку.
+  const int MAX_PAGES_TRACK = 200; // скільки позицій сторінок зберігати (зазвичай достатньо)
+  uint32_t pageOffsets[MAX_PAGES_TRACK];
+  int pagesCount = 0;
+  int curPage = 0;
+
+  // перша сторінка починається на 0
+  pageOffsets[0] = 0;
+  pagesCount = 1;
+
+  bool exitViewer = false;
+  while (!exitViewer) {
+    // відкриваємо файл з позиції pageOffsets[curPage]
+    f.seek(pageOffsets[curPage]);
+    // зчитуємо сторінку рядків
+    String lines[maxLinesPerPage];
+    int linesRead = 0;
+    while (linesRead < maxLinesPerPage && f.available()) {
+      // читаємо один "логічний" рядок до '\n'
+      String raw;
+      char ch;
+      while (f.available()) {
+        ch = (char)f.read();
+        if (ch == '\r') continue; // ігноруємо CR
+        if (ch == '\n') break;
+        raw += ch;
+      }
+      // якщо raw довший ніж maxCharsPerLine — робимо розбиття на шматки
+      int pos = 0;
+      while (pos < (int)raw.length() && linesRead < maxLinesPerPage) {
+        String part = raw.substring(pos, min(pos + maxCharsPerLine, (int)raw.length()));
+        lines[linesRead++] = part;
+        pos += maxCharsPerLine;
+      }
+      // якщо рядок був порожній (тільки '\n'), виводимо порожній
+      if (raw.length() == 0 && linesRead < maxLinesPerPage) {
+        lines[linesRead++] = "";
+      }
+      // якщо файл закінчився посеред рядка та не було '\n', ми також додали частину
+    }
+
+    // Після того, як прочитали сторінку — поточна позиція файлу вказує на початок наступної сторінки
+    uint32_t nextPageOffset = f.position(); // позиція початку наступної сторінки
+    // якщо ми попередньо не зберігали цю позицію і ще маємо місце в масиві — зберігаємо
+    if (curPage == pagesCount - 1) {
+      if (pagesCount < MAX_PAGES_TRACK) {
+        pageOffsets[pagesCount++] = nextPageOffset;
+      } // якщо місця немає — просто не зберігаємо, назад можна рухатись по збережених сторінках
+    }
+
+    // --- Відмалювати сторінку ---
+    display.fillScreen(TFT_WHITE);
+    display.setTextColor(TFT_BLACK);
+    display.setTextSize(textSize);
+    display.setTextDatum(textdatum_t::top_left);
+    int y = marginY;
+    for (int li = 0; li < linesRead; ++li) {
+      display.setCursor(marginX, y);
+      display.println(lines[li]);
+      y += lineHeight;
+    }
+
+    // низ: номер сторінки та підказки
+    display.setTextSize(1);
+    display.setCursor(marginX, H - footerH + 8);
+    display.print("Page "); display.print(curPage + 1);
+    display.print("   "); display.print(fullPath);
+    // кнопки Prev/Next
+    int btnW = 80, btnH = 30;
+    int leftX = marginX, rightX = W - marginX - btnW, btnY = H - footerH + 4;
+    if (curPage > 0) {
+      display.drawRoundRect(leftX, btnY, btnW, btnH, 6, TFT_BLACK);
+      display.setTextDatum(textdatum_t::middle_center);
+      display.drawString("Prev", leftX + btnW/2, btnY + btnH/2);
+    } else {
+      display.drawRoundRect(leftX, btnY, btnW, btnH, 6, TFT_BLACK);
+      display.setTextDatum(textdatum_t::middle_center);
+      display.drawString("Prev", leftX + btnW/2, btnY + btnH/2);
+    }
+    // Next (якщо ще є контент — тобто позиція файлу не змінилась і f.available() == 0 => кінцева сторінка)
+    if (f.position() < f.size()) {
+      display.drawRoundRect(rightX, btnY, btnW, btnH, 6, TFT_BLACK);
+      display.setTextDatum(textdatum_t::middle_center);
+      display.drawString("Next", rightX + btnW/2, btnY + btnH/2);
+    } else {
+      display.drawRoundRect(rightX, btnY, btnW, btnH, 6, TFT_BLACK);
+      display.setTextDatum(textdatum_t::middle_center);
+      display.drawString("End", rightX + btnW/2, btnY + btnH/2);
+    }
+
+    // top-left hint for exit
+    display.setTextSize(1);
+    display.setCursor(4, 4);
+    display.println(".. <- Back");
+
+    display.display();
+
+    // --- Ждем торку для навігації ---
+    bool pageChange = false;
+    while (!pageChange) {
+      int16_t tx, ty;
+      if (display.getTouch(&tx, &ty)) {
+        // exit
+        if (tx < 20 && ty < 20) {
+          exitViewer = true;
+          pageChange = true;
+          break;
+        }
+        // Prev
+        if (tx >= leftX && tx <= leftX + btnW && ty >= btnY && ty <= btnY + btnH) {
+          if (curPage > 0) {
+            curPage--;
+            // перемістимося в початкову позицію сторінки curPage
+            f.seek(pageOffsets[curPage]);
+            pageChange = true;
+            break;
+          }
+        }
+        // Next
+        if (tx >= rightX && tx <= rightX + btnW && ty >= btnY && ty <= btnY + btnH) {
+          // якщо вже кінцева сторінка і f.position() >= f.size() — нічого не робимо
+          if (f.position() < f.size()) {
+            curPage++;
+            // якщо ми маємо збережену позицію сторінки — перемістимося туди, інакше f.position() вже вказує на початок (прочитано)
+            if (curPage < pagesCount) {
+              f.seek(pageOffsets[curPage]);
+            } else {
+              // curPage == pagesCount (ми ще не зберегли позицію) — позиція вже вказує на потрібну точку (nextPageOffset)
+              // але щоб бути безпечним, встановимо позицію в nextPageOffset
+              // nextPageOffset було підраховано вище
+              // (необов'язково, бо f.position() вже там)
+            }
+            pageChange = true;
+            break;
+          } else {
+            // кінець файлу — можна повернутися на початок або нічого
+            // тут просто нічого
+          }
+        }
+        // тап у зоні контенту — справа = next, зліва = prev (швидка навігація)
+        int contentTop = marginY;
+        int contentBottom = btnY - 4;
+        if (ty >= contentTop && ty <= contentBottom) {
+          if (tx > W/2) { // права частина — next
+            if (f.position() < f.size()) {
+              curPage++;
+              pageChange = true;
+              break;
+            }
+          } else { // ліва частина — prev
+            if (curPage > 0) {
+              curPage--;
+              f.seek(pageOffsets[curPage]);
+              pageChange = true;
+              break;
+            }
+          }
+        }
+      } // if touch
+      delay(30);
+    } // wait for touch loop
+  } // viewer while
+
+  f.close();
+}
 
 void FS_visual() {
     String path = "/";
@@ -10320,126 +11148,7 @@ void FS_visual() {
         if(!dir){
             display.println("Cannot open directory!");
             delay(500);
-            return;
-        }
-
-        const int MAX_ITEMS = 50;
-        String items[MAX_ITEMS];
-        bool isDir[MAX_ITEMS];
-        int count = 0;
-
-        File file = dir.openNextFile();
-        while(file && count < MAX_ITEMS){
-            items[count] = file.name();
-            isDir[count] = file.isDirectory();
-            count++;
-            file = dir.openNextFile();
-        }
-
-        for(int i=0;i<count;i++){
-            display.println((isDir[i]? "[D] ":"[F] ") + items[i]);
-        }
-        display.display();
-
-        while(true){
-            int16_t x,y;
-            if(display.getTouch(&x,&y)){
-              display.fillCircle(x, y, 5, TFT_BLACK);
-                if(x<20 && y<20){
-                    if(path == "/") return;
-                    int lastSlash = path.lastIndexOf('/');
-                    if(lastSlash>0) path = path.substring(0,lastSlash);
-                    else path = "/";
-                    break;
-                }
-
-                int idx = (y / 20) - 1;
-                if(idx>=0 && idx<count){
-                    String selected = items[idx];
-                    String fullPath = path + "/" + selected;
-
-                    if(isDir[idx]){
-                        path = fullPath;
-                        break;
-                    } else {
-                        // --- Відкриваємо файл ---
-                        if(selected.endsWith(".txt") || selected.endsWith(".TXT")){
-                            File f = SD.open(fullPath);
-                            if(!f) break;
-                            display.fillScreen(TFT_WHITE);
-                            display.setCursor(0,0);
-                            while(f.available()){
-                                String line = f.readStringUntil('\n');
-                                display.println(line);
-                            }
-                            display.display();
-                            f.close();
-                        } 
-                        else if(selected.endsWith(".jpg") || selected.endsWith(".JPG") ||
-                                selected.endsWith(".png") || selected.endsWith(".PNG")) {
-
-                            File f = SD.open(fullPath);
-                            if(!f) break;
-                            size_t fileSize = f.size();
-
-                            // --- Читаємо файл у буфер ---
-                            uint8_t *buf = (uint8_t*)malloc(fileSize);
-                            if(buf){
-                                f.read(buf, fileSize);
-                                f.close();
-                                display.fillScreen(TFT_WHITE);
-                                if(selected.endsWith(".jpg") || selected.endsWith(".JPG"))
-                                    display.drawJpg(buf, fileSize, 0, 0);
-                                else
-                                    display.drawPng(buf, fileSize, 0, 0);
-                                free(buf);
-                            } else {
-                                display.fillScreen(TFT_WHITE);
-                                display.setCursor(0,0);
-                                display.println("Not enough RAM for image!");
-                                delay(500);
-                            }
-                            display.display();
-                        } 
-                        else {
-                            display.fillScreen(TFT_WHITE);
-                            display.setCursor(0,0);
-                            display.println("Cannot open this file type");
-                            delay(500);
-                            display.display();
-                        }
-
-                        // --- чекаємо назад ---
-                        while(true){
-                            int16_t bx,by;
-                            if(display.getTouch(&bx,&by)){
-                                if(bx<20 && by<20) break;
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-    }
-}
-
-
-
-
-void FS_visualbeta() {
-    String path = "/";
-    bool exitFS = false;
-
-    while(!exitFS) {
-        display.fillScreen(TFT_WHITE);
-        display.setCursor(0,0);
-        display.setTextColor(TFT_BLACK);
-        display.println(".. <- Back");
-
-        File dir = SD.open(path);
-        if(!dir){
-            display.println("Cannot open directory!");
+            if(alertBox("try mounting the card?", "?", true)){if(SD_begin()) {SD_info();}}
             return;
         }
 
@@ -10507,6 +11216,10 @@ void FS_visualbeta() {
                             File f = SD.open(fullPath);
                             if(!f) break;
                             size_t fileSize = f.size();
+                            if (selected.endsWith(".txt") || selected.endsWith(".log") || selected.endsWith(".dat")) {
+                                    // викликаємо текстовий переглядач
+                                    FS_showTextFile(fullPath);
+                            }
                             uint8_t *buf = (uint8_t*)malloc(fileSize);
                             if(buf){
                                 f.read(buf, fileSize);
@@ -10519,8 +11232,8 @@ void FS_visualbeta() {
                                 free(buf);
                             } else {
                                 display.fillScreen(TFT_WHITE);
-                                display.setCursor(0,0);
-                                display.println("Not enough RAM for image!");
+                                display.setCursor(0,10);
+                                display.println("Not enough RAM!");
                                 display.display();
                                 f.close();
                             }
@@ -10551,7 +11264,7 @@ void FS_visualbeta() {
                             if(!buf) {
                                 // пам'яті не вистачає
                                 display.fillScreen(TFT_WHITE);
-                                display.setCursor(0,0);
+                                display.setCursor(0,10);
                                 display.println("Not enough RAM for image!");
                                 display.display();
                                 fimg.close();
@@ -10580,8 +11293,8 @@ void FS_visualbeta() {
                             // Показуємо кнопки внизу та індикацію сторінок
                             int W = 540; // ширина дисплея (M5Paper)
                             int H = 960; // висота дисплея
-                            int btnH = 36;
-                            int btnW = 80;
+                            int btnH = 30;
+                            int btnW = 50;
                             int margin = 8;
                             int yBtn = H - btnH - margin;
 
@@ -10667,6 +11380,11 @@ void FS_visualbeta() {
         } // inner while (list loop)
     } // outer while
 }
+
+
+
+
+
 
 
 
@@ -10971,6 +11689,121 @@ void connectWiFiUI(M5GFX &display) {
   //display.setTextSize(2);
   wifi_mode = 2;
 
+  // Шлях до конфігу на SD
+  const char *configFile = "/sys/config/wifi.cfg";
+
+  auto sdCardAvailable = []() -> bool {
+    // вважатимемо, що cardSize() == 0 => немає карти
+    // Якщо у тебе інша перевірка — можна поміняти на SD.cardType() тощо
+    return (SD.cardSize() > 0);
+  };
+
+  auto canWriteConfig = [&](bool &haveCard, bool &haveDir)->bool {
+    haveCard = sdCardAvailable();
+    haveDir = false;
+    if (!haveCard) return false;
+    if (SD.exists(configDir)) {
+      // переконаємось, що це каталог
+      // (бібліотека SD не має прямої isDirectory() в усіх реалізаціях,
+      // тому просто вважаємо, що exists==true достатньо)
+      haveDir = true;
+      return true;
+    }
+    return false;
+  };
+
+  // Функція шукає пароль по SSID в конфіговому файлі.
+  auto findPasswordInConfig = [&](const String &ssid)->String {
+    if (!sdCardAvailable()) return String(""); // без карти
+    if (!SD.exists(configFile)) return String("");
+    File f = SD.open(configFile, FILE_READ);
+    if (!f) return String("");
+    while (f.available()) {
+      String line = f.readStringUntil('\n');
+      line.trim(); // прибрати пробіли
+      if (line.length() == 0) continue;
+      // формат: "SSID  :  password ;"
+      int colon = line.indexOf(':');
+      int sem = line.indexOf(';', colon + 1);
+      if (colon < 0) continue;
+      String left = line.substring(0, colon);
+      left.trim();
+      if (left == ssid) {
+        // отримуємо пароль між ':' і ';'
+        String right;
+        if (sem > colon) right = line.substring(colon + 1, sem);
+        else right = line.substring(colon + 1);
+        right.trim();
+        f.close();
+        return right; // може бути порожній пароль
+      }
+    }
+    f.close();
+    return String("");
+  };
+
+  // Функція додає або оновлює запис SSID:password;
+  auto writeOrUpdateConfig = [&](const String &ssid, const String &password)->bool {
+    bool haveCard=false, haveDir=false;
+    if (!canWriteConfig(haveCard, haveDir)) {
+      // не записуємо, якщо нема карти або дерикторії
+      return false;
+    }
+
+    String newLine = ssid + "  :  " + password + " ;";
+
+    // Якщо файлу немає — просто створимо і запишемо
+    if (!SD.exists(configFile)) {
+      File f = SD.open(configFile, FILE_WRITE);
+      if (!f) return false;
+      f.println(newLine);
+      f.close();
+      return true;
+    }
+
+    // Файл існує — прочитаємо весь вміст, оновимо рядок якщо знайдено, і перезапишемо
+    File f = SD.open(configFile, FILE_READ);
+    if (!f) return false;
+    String content = "";
+    bool updated = false;
+    while (f.available()) {
+      String line = f.readStringUntil('\n');
+      String origLine = line;
+      line.trim();
+      if (line.length() == 0) {
+        content += origLine + "\n";
+        continue;
+      }
+      int colon = line.indexOf(':');
+      if (colon >= 0) {
+        String left = line.substring(0, colon);
+        left.trim();
+        if (left == ssid) {
+          // замінити рядок
+          content += newLine + "\n";
+          updated = true;
+          continue;
+        }
+      }
+      // якщо не наш SSID — просто додати як є (включаючи кінцевий '\n')
+      content += origLine + "\n";
+    }
+    f.close();
+
+    if (!updated) {
+      // додати новий рядок в кінець
+      content += newLine + "\n";
+    }
+
+    // Перезаписати файл (видалити старий -> створити новий)
+    SD.remove(configFile);
+    File fw = SD.open(configFile, FILE_WRITE);
+    if (!fw) return false;
+    fw.print(content);
+    fw.close();
+    return true;
+  };
+
   if (WiFi.status() != WL_CONNECTED) {
     display.drawString("Scanning Wi-Fi...", display.width() / 2, 25);
     display.display();
@@ -11003,7 +11836,6 @@ void connectWiFiUI(M5GFX &display) {
 
       display.display();
 
-
       if (display.getTouch(&tx, &ty)) {
         if (tx < 20 && ty < 20) break;
         for (int i = 0; i < n; i++) {
@@ -11017,42 +11849,99 @@ void connectWiFiUI(M5GFX &display) {
       delay(100);
     }
 
-    // --- Введення паролю ---
-    display.clear(TFT_WHITE);
-    display.drawString("SSID: " + selectedSSID, display.width() / 2, 25);
-    display.drawString("enter pswd:", 100, 60);
-    display.display();
+    if (selectedSSID == "") return;
 
-    String password = showSimpleKeyboard(display);
+    // --- Спроба знайти пароль в конфігу ---
+    String storedPassword = findPasswordInConfig(selectedSSID);
+    bool triedStored = false;
+    bool connectSuccess = false;
 
-    // --- Спроба з'єднання ---
-    display.clear(TFT_WHITE);
-    display.drawString("connecting...", display.width() / 2, 25);
-    display.display();
-
-    WiFi.begin(selectedSSID.c_str(), password.c_str());
-
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts++ < 20) {
-      if (display.getTouch(&tx, &ty)) {
-        if (tx < 20 && ty < 20) break;
-      }
-      delay(500);
-      display.drawString(".", 20 + attempts * 10, 60);
+    if (storedPassword.length() > 0) {
+      // Спробуємо підключитись одразу з цим паролем
+      triedStored = true;
+      display.clear(TFT_WHITE);
+      display.drawString("Trying saved password...", display.width() / 2, 25);
       display.display();
+
+      WiFi.begin(selectedSSID.c_str(), storedPassword.c_str());
+      int attempts = 0;
+      while (WiFi.status() != WL_CONNECTED && attempts++ < 20) {
+        if (display.getTouch(&tx, &ty)) {
+          if (tx < 20 && ty < 20) break;
+        }
+        delay(500);
+        display.drawString(".", 20 + attempts * 10, 60);
+        display.display();
+      }
+      if (WiFi.status() == WL_CONNECTED) {
+        connectSuccess = true;
+        display.drawString("Connected with saved!", display.width() / 2, 100);
+        display.drawString(WiFi.localIP().toString(), 90, 140);
+        wifi_mode = 1;
+      } else {
+        display.drawString("saved pass failed", display.width() / 2, 100);
+      }
+      display.display();
+      delay(1000);
     }
 
-    if (WiFi.status() == WL_CONNECTED) {
-      display.drawString("Connected!", display.width() / 2, 100);
-      display.drawString(WiFi.localIP().toString(), 90, 140);
-      wifi_mode = 1;
+    if (!connectSuccess) {
+      // --- Введення паролю (новий або при невдалому збереженому) ---
+      display.clear(TFT_WHITE);
+      display.drawString("SSID: " + selectedSSID, display.width() / 2, 25);
+      display.drawString("enter pswd:", 100, 60);
+      display.display();
+
+      String password = showSimpleKeyboard(display);
+
+      // --- Спроба з'єднання ---
+      display.clear(TFT_WHITE);
+      display.drawString("connecting...", display.width() / 2, 25);
+      display.display();
+
+      WiFi.begin(selectedSSID.c_str(), password.c_str());
+
+      int attempts = 0;
+      while (WiFi.status() != WL_CONNECTED && attempts++ < 20) {
+        if (display.getTouch(&tx, &ty)) {
+          if (tx < 20 && ty < 20) break;
+        }
+        delay(500);
+        display.drawString(".", 20 + attempts * 10, 60);
+        display.display();
+      }
+
+      if (WiFi.status() == WL_CONNECTED) {
+        display.drawString("Connected!", display.width() / 2, 100);
+        display.drawString(WiFi.localIP().toString(), 90, 140);
+        wifi_mode = 1;
+
+        // Записати/оновити конфіг (тільки якщо є карта і є /sys/config)
+        bool haveCard=false, haveDir=false;
+        if (canWriteConfig(haveCard, haveDir)) {
+          bool ok = writeOrUpdateConfig(selectedSSID, password);
+          if (ok) {
+            display.drawString("Config saved", display.width() / 2, 170);
+          } else {
+            display.drawString("Save failed", display.width() / 2, 170);
+          }
+        } else {
+          // Не записуємо — можна показати причину
+          if (!haveCard) display.drawString("No SD card - not saved", display.width() / 2, 170);
+          else if (!haveDir) display.drawString("No /sys/config - not saved", display.width() / 2, 170);
+        }
+      } else {
+        display.drawString("conection error!", display.width() / 2, 100);
+        selectedSSID = "";
+        // Якщо був savedPassword але він не спрацював і ми ввели новий, оновимо конфіг лише коли успішно підключено
+      }
+
+      display.display();
+      delay(2000);
     } else {
-      display.drawString("conection error!", display.width() / 2, 100);
-      selectedSSID = "";
+      // Підключились з збереженим паролем — нічого не робимо
+      delay(2000);
     }
-
-    display.display();
-    delay(2000);
   } else {
     String currentSSID = WiFi.SSID();
     display.fillRect(20, 100, 490, 50, TFT_WHITE);
@@ -11069,6 +11958,7 @@ void connectWiFiUI(M5GFX &display) {
     }
   }
 }
+
 //--- end AI code 80%---
 
 //-------- Settings --------
@@ -11165,6 +12055,11 @@ void openSettings() {
     display.fillRect(20, 420, 490, 50, TFT_WHITE);
     display.drawRect(20, 420, 490, 50, TFT_BLACK);
     display.drawString(String(WallpaperURL), 230, 457);
+    //--- sd card ---
+    display.drawString("sd", 80, 500);
+    display.fillRect(20, 500, 490, 50, TFT_WHITE);
+    display.drawRect(20, 500, 490, 50, TFT_BLACK);
+    display.drawString(sd_info, 230, 539);
 
 
     display.display();
