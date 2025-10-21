@@ -9159,6 +9159,7 @@ void openTERMINALApp(){
     if(cmd == "/tc4"){TC_start(4);}
     if(cmd == "/c"){CALC_start();}
     if(cmd == "/b"){buzzertest();}
+    if(cmd == "/nt"){FS_notesPro();}
     if(cmd == "/sd"){if(SD_begin()) {SD_info();} }
     if(cmd == "/fs"){FS_visual(); }
     if(cmd == "/t"){if(alertBox("Test?", "!", true)){display.println("OK");}else{display.println("no OK");} }
@@ -11032,6 +11033,150 @@ void TouchTest() {
     delay(30);
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+void FS_notesPro() {
+  display.setTextSize(1);
+  display.setTextColor(BLACK);
+  display.fillScreen(WHITE);
+
+  if (!SD.exists("/notes")) SD.mkdir("/notes");
+
+  // список нотаток
+  String files[64];
+  int fileCount = 0;
+  File dir = SD.open("/notes");
+  File entry;
+  while ((entry = dir.openNextFile())) {
+    if (!entry.isDirectory()) files[fileCount++] = String(entry.name());
+    entry.close();
+  }
+  dir.close();
+
+  int selected = -1;
+  int lineHeight = 25;
+
+  while (true) {
+    // === малюємо список нотаток ===
+    display.fillScreen(WHITE);
+    display.setCursor(10, 5);
+    display.println("📒 Notes (/notes/)");
+    display.drawLine(0, 20, display.width(), 20, LIGHTGREY);
+
+    for (int i = 0; i < fileCount; i++) {
+      display.setCursor(10, 25 + i * lineHeight);
+      display.println(files[i]);
+      display.drawLine(0, 25 + i * lineHeight + lineHeight - 5, display.width(), 25 + i * lineHeight + lineHeight - 5, LIGHTGREY);
+    }
+    display.println("\n+ Tap empty area to create new note");
+
+    // чекаємо тап
+    int tx, ty;
+    while (!display.getTouch(&tx, &ty)) {
+      delay(50);
+    }
+
+    if (tx < 20 && ty < 20) return;  // вихід
+
+    // вибір існуючої нотатки або створення нової
+    int idx = (ty - 25) / lineHeight;
+    if (idx >= 0 && idx < fileCount) {
+      selected = idx;
+    } else {
+      selected = fileCount;
+      files[fileCount++] = "note_" + String(millis()) + ".txt";
+      // створюємо порожній файл
+      File nf = SD.open("/notes/" + files[selected], FILE_WRITE);
+      nf.println("");
+      nf.close();
+    }
+
+    // === відкриття нотатки ===
+    String content = "";
+    File noteFile = SD.open("/notes/" + files[selected], FILE_READ);
+    if (noteFile) {
+      while (noteFile.available()) content += (char)noteFile.read();
+      noteFile.close();
+    }
+
+    // розбиваємо на рядки
+    String lines[200];
+    int lineCount = 0;
+    String temp = content;
+    while (temp.length()) {
+      int nl = temp.indexOf('\n');
+      if (nl == -1) {
+        lines[lineCount++] = temp;
+        temp = "";
+      } else {
+        lines[lineCount++] = temp.substring(0, nl);
+        temp = temp.substring(nl + 1);
+      }
+    }
+
+    // === виведення нотатки ===
+    display.fillScreen(WHITE);
+    display.setCursor(5, 5);
+    display.println("Editing: " + files[selected]);
+    display.drawLine(0, 20, display.width(), 20, LIGHTGREY);
+
+    while (true) {
+      // відображення рядків
+      display.fillRect(0, 25, display.width(), display.height() - 25, WHITE);
+      for (int i = 0; i < lineCount; i++) {
+        display.setCursor(5, 25 + i * lineHeight);
+        display.println(lines[i]);
+        display.drawLine(0, 25 + i * lineHeight + lineHeight - 5, display.width(), 25 + i * lineHeight + lineHeight - 5, LIGHTGREY);
+      }
+      display.fillCircle(display.width() - 10, 10, 3, DARKGREY); // індикатор активності
+
+      // чекаємо тап
+      while (!display.getTouch(&tx, &ty)) delay(50);
+
+      if (tx < 20 && ty < 20) {
+        // вихід і збереження
+        String outContent = "";
+        for (int i = 0; i < lineCount; i++) outContent += lines[i] + "\n";
+        File f = SD.open("/notes/" + files[selected], FILE_WRITE);
+        if (f) {
+          f.print(outContent);
+          f.close();
+        }
+        break;
+      }
+
+      // редагування рядка
+      int tappedLine = (ty - 25) / lineHeight;
+      if (tappedLine >= 0 && tappedLine < lineCount) {
+        String newLine = showSimpleKeyboard(display);
+        if (newLine.length() > 0) {
+          lines[tappedLine] = newLine;
+          // додаємо новий рядок після редагованого
+          if (tappedLine == lineCount - 1) {
+            lines[lineCount++] = "";
+          }
+        }
+      }
+    }
+  }
+}
+
+
+
+
+
 //-------------------------------------------
 //---- buzzer -------------------------------
 // Функція для конвертації NOTE_... в частоту
@@ -11129,21 +11274,21 @@ int noteToFreq(String note){
 }
 
 // Основна функція відтворення мелодії
-void FS_buzzerPlay(String filePath){
-  if(!SD.begin()){
+void FS_buzzerPlay(String filePath) {
+  if (!SD.begin()) {
     Serial.println("SD not mounted!");
     return;
   }
 
   File f = SD.open(filePath);
-  if(!f){
+  if (!f) {
     Serial.println("Cannot open file");
     return;
   }
 
-  const int MAX_NOTES = 128;
-  int melody[MAX_NOTES];
-  int durations[MAX_NOTES];
+  const int BUF_SIZE = 128;
+  int melody[BUF_SIZE];
+  int durations[BUF_SIZE];
   int noteCount = 0;
   int durCount = 0;
 
@@ -11151,64 +11296,138 @@ void FS_buzzerPlay(String filePath){
   bool readingDurations = false;
   String buffer = "";
 
-  while(f.available()){
-    char c = f.read();
+  // ---------- ІНТЕРФЕЙС ----------
+  display.fillScreen(TFT_WHITE);
+  display.setTextColor(TFT_BLACK);
+  display.setTextSize(1);
+  display.drawString(filePath, display.width() / 2, 40);
 
-    // Вихід на тап у верхній лівий кут
+  // Таймлайн
+  int barX = 40;
+  int barY = display.height() / 2;
+  int barW = display.width() - 80;
+  int barH = 20;
+  display.drawRect(barX, barY, barW, barH, TFT_BLACK);
+
+  // Кнопка "Play"
+  int btnW = 150;
+  int btnH = 40;
+  int btnX = (display.width() - btnW) / 2;
+  int btnY = barY + 60;
+  display.fillRoundRect(btnX, btnY, btnW, btnH, 10, TFT_GREEN);
+  display.setTextDatum(textdatum_t::middle_center);
+  display.drawString("> Play", btnX + btnW / 2, btnY + btnH / 2);
+  display.display();
+
+  // Очікування натискання Play
+  while (true) {
     int16_t tx, ty;
-    if(display.getTouch(&tx, &ty)){
-      if(tx<20 && ty<20){ f.close(); return; }
+    if (display.getTouch(&tx, &ty)) {
+      if (tx < 20 && ty < 20) { f.close(); return; }  // вихід
+      if (tx > btnX && tx < btnX + btnW && ty > btnY && ty < btnY + btnH) break;
+    }
+    delay(50);
+  }
+
+  // ---------- ПРОГРАВАННЯ ПО БУФЕРАХ ----------
+  bool reading = true;
+  unsigned long totalBytes = f.size();
+  unsigned long processed = 0;
+
+  while (reading && f.available()) {
+    noteCount = 0;
+    durCount = 0;
+    buffer = "";
+
+    while (f.available() && (noteCount < BUF_SIZE || durCount < BUF_SIZE)) {
+      char c = f.read();
+      processed++;
+
+      if (c == '\n' || c == '\r') continue;
+      buffer += c;
+
+      if (buffer.endsWith("int melody[]")) {
+        readingMelody = true;
+        buffer = "";
+      } 
+      else if (buffer.endsWith("int durations[]")) {
+        readingDurations = true;
+        buffer = "";
+      } 
+      else if (buffer.endsWith("};")) {
+        readingMelody = false;
+        readingDurations = false;
+        buffer = "";
+      } 
+      else if (readingMelody && c == ',') {
+        buffer.trim(); buffer.replace(",", "");
+        if (buffer.length() > 0) melody[noteCount++] = noteToFreq(buffer);
+        buffer = "";
+      } 
+      else if (readingDurations && c == ',') {
+        buffer.trim(); buffer.replace(",", "");
+        if (buffer.length() > 0) durations[durCount++] = buffer.toInt();
+        buffer = "";
+      }
+
+      // Якщо буфер заповнився — вийти на програвання
+      if (noteCount >= BUF_SIZE || durCount >= BUF_SIZE) break;
     }
 
-    if(c == '\n' || c == '\r') continue; // ігноруємо переноси рядків
-    buffer += c;
+    int count = min(noteCount, durCount);
+    for (int i = 0; i < count+1; i++) {
+      int dur = 1000 / max(1, durations[i]); // 0.2 секунди базова швидкість
+      if (melody[i] > 0) tone(BUZZER_PIN, melody[i], dur);
+      delay(dur * 1.3);
+      noTone(BUZZER_PIN);
 
-    if(buffer.endsWith("int melody[]")) {
-      readingMelody = true;
-      buffer = "";
-    }
-    else if(buffer.endsWith("int durations[]")) {
-      readingDurations = true;
-      buffer = "";
-    }
-    else if(buffer.endsWith("};")) {
-      readingMelody = false;
-      readingDurations = false;
-      buffer = "";
-    }
-    else if(readingMelody && c == ',') {
-      buffer.trim();
-      buffer.replace(",", "");
-      if(buffer.length()>0){
-        melody[noteCount++] = noteToFreq(buffer);
+      // Прогрес бар
+     // int filled = map(processed, 0, totalBytes, 0, barW);
+     int filled = map(i, 0, noteCount, 0, barW);
+      display.fillRect(barX, barY, filled, barH, TFT_BLACK);
+      display.display();
+
+      // Перевірка виходу
+      int16_t tx, ty;
+      if (display.getTouch(&tx, &ty)) {
+        if (tx < 20 && ty < 20) { 
+          reading = false; 
+          break; 
+        }
       }
-      buffer = "";
-    }
-    else if(readingDurations && c == ',') {
-      buffer.trim();
-      buffer.replace(",", "");
-      if(buffer.length()>0){
-        durations[durCount++] = buffer.toInt();
-      }
-      buffer = "";
     }
   }
+
   f.close();
 
-  // Відтворення мелодії
-  int count = min(noteCount, durCount);
-  for(int i=0; i<count; i++){
-    int dur = 1000 / max(1, durations[i]);   // тривалість ~0.2 сек
-    if(melody[i] > 0) tone(BUZZER_PIN, melody[i], dur);
-    delay(dur * 1.3);
-    noTone(BUZZER_PIN);
+  // ---------- ЗАВЕРШЕННЯ ----------
+  display.fillRoundRect(btnX, btnY, btnW, btnH, 10, TFT_GREEN);
+  display.drawString("> Play Again", btnX + btnW / 2, btnY + btnH / 2);
+  display.display();
 
+  // Очікування кнопки "Play Again" або вихід
+  while (true) {
     int16_t tx, ty;
-    if(display.getTouch(&tx, &ty)){
-      if(tx<20 && ty<20) return;
+    if (display.getTouch(&tx, &ty)) {
+      if (tx < 20 && ty < 20) break; // вихід
+      if (tx > btnX && tx < btnX + btnW && ty > btnY && ty < btnY + btnH) {
+        delay(200);
+        FS_buzzerPlay(filePath);  // повторне відтворення
+        return;
+      }
     }
+    delay(50);
   }
+
+  display.fillScreen(TFT_WHITE);
+  display.setTextColor(TFT_BLACK);
+  display.drawString("Exiting...", display.width() / 2, display.height() / 2);
+  display.display();
+  delay(300);
 }
+
+
+
 
 
 
@@ -12169,7 +12388,7 @@ void connectWiFiUI(M5GFX &display) {
       display.drawString("enter pswd:", 100, 60);
       display.display();
 
-      String password = showSimpleKeyboard(display);
+      String password = showSimpleKeyboard(display); 
 
       // --- Спроба з'єднання ---
       display.clear(TFT_WHITE);
@@ -12378,7 +12597,7 @@ void openNotesApp() {
 }
 
 //--- AI code 90%---
-String showSimpleKeyboard(M5GFX &display) {
+String showSimpleKeyboardOld(M5GFX &display) {
   //display.setRotation(0);
   const char* layout[] = {
     "1234567890",
@@ -12459,6 +12678,82 @@ skipRedraw:;
 }
 
 //--- End AI code 90%---
+
+String showSimpleKeyboard(M5GFX &display) {
+    const char* layout[] = {
+        "1234567890",
+        "qwertyuiop",
+        "asdfghjkl.",
+        "zxcvbnm <>",
+        ":/"
+    };
+    const int keyboardY = 700; // змініть під екран
+    const int keyboardX = 4;
+    const int rows = 5;
+    const int keyW = 47;
+    const int keyH = 45;
+    const int spacing = 7;
+
+    String input = "";
+    int tx, ty;
+
+    // малюємо клавіатуру один раз
+   // display.fillScreen(TFT_WHITE);
+    display.setTextColor(TFT_BLACK);
+    for (int r = 0; r < rows; r++) {
+        const char* row = layout[r];
+        int len = strlen(row);
+        for (int c = 0; c < len; c++) {
+            int x = c * (keyW + spacing) + keyboardX;
+            int y = r * (keyH + spacing) + keyboardY;
+            display.fillRect(x, y, keyW, keyH, TFT_LIGHTGREY);
+            display.drawRect(x, y, keyW, keyH, TFT_BLACK);
+            String label = row[c] == '<' ? "←" : (row[c] == '>' ? "OK" : String(row[c]));
+            display.drawString(label, x + keyW / 2, y + keyH / 2 - 10);
+        }
+    }
+
+    // поле вводу
+    display.fillRect(25, keyboardY - 50, 460, 40, TFT_WHITE);
+    display.drawRect(25, keyboardY - 50, 460, 40, TFT_BLACK);
+    display.setCursor(27, keyboardY - 35);
+    display.setTextColor(TFT_BLACK);
+    display.print(input);
+
+    while (true) {
+        if (display.getTouch(&tx, &ty)) {
+          delay(100);
+            // вихід через кут
+            if (tx < 20 && ty < 20) return input;
+
+            // перевірка кнопок
+            for (int r = 0; r < rows; r++) {
+                const char* row = layout[r];
+                int len = strlen(row);
+                for (int c = 0; c < len; c++) {
+                    int x = c * (keyW + spacing) + keyboardX;
+                    int y = r * (keyH + spacing) + keyboardY;
+                    if (tx >= x && tx <= x + keyW && ty >= y && ty <= y + keyH) {
+                        char key = row[c];
+                        if (key == '<') {
+                            if (input.length() > 0) input.remove(input.length() - 1);
+                        } else if (key == '>') {
+                            return input;
+                        } else {
+                            input += key;
+                        }
+                        // оновлення тільки рядка вводу
+                        display.fillRect(25, keyboardY - 50, 460, 40, TFT_WHITE);
+                        display.drawRect(25, keyboardY - 50, 460, 40, TFT_BLACK);
+                        display.setCursor(27, keyboardY - 35);
+                        display.print(input);
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 //--- ai code ---
 
