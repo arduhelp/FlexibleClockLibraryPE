@@ -8969,6 +8969,49 @@ void handleTouch(Button* btns, int count) {
 
 // ------------------ Програми --------------------
 
+
+void takeScreenshot() {
+     if (!SD.begin()) return;
+
+    if (!SD.exists("/screenshots")) SD.mkdir("/screenshots");
+
+    String fname = "/screenshots/scsh_" + String(millis()) + ".bmp";
+    File file = SD.open(fname, FILE_WRITE);
+    if (!file) return;
+
+    uint16_t w = display.width();
+    uint16_t h = display.height();
+
+    // Заголовок BMP
+    uint32_t rowSize = (w * 3 + 3) & ~3;
+    uint32_t fileSize = 54 + rowSize * h;
+    uint8_t header[54] = {
+        0x42, 0x4D,
+        (uint8_t)(fileSize), (uint8_t)(fileSize >> 8),
+        (uint8_t)(fileSize >> 16), (uint8_t)(fileSize >> 24),
+        0,0,0,0, 54,0,0,0, 40,0,0,0,
+        (uint8_t)(w), (uint8_t)(w >> 8), (uint8_t)(w >> 16), (uint8_t)(w >> 24),
+        (uint8_t)(h), (uint8_t)(h >> 8), (uint8_t)(h >> 16), (uint8_t)(h >> 24),
+        1,0,24,0
+    };
+    file.write(header, 54);
+
+    // Буфер для рядка
+    std::vector<uint8_t> line(rowSize);
+    std::vector<uint8_t> buffer(w * 3);
+
+    // Зчитуємо блоками для кращої продуктивності
+    for (int16_t y = h - 1; y >= 0; y--) {
+        display.readRectRGB(0, y, w, 1, buffer.data());
+        memcpy(line.data(), buffer.data(), w * 3);
+        file.write(line.data(), rowSize);
+    }
+
+    file.close();
+
+}
+
+
 //---------------
 //--- taskbar ---
 //---------------
@@ -9150,6 +9193,7 @@ void openTERMINALApp(){
     if(cmd == "/bj21"){Blackjack21();}
     if(cmd == "/tt"){TouchTest();}
     if(cmd == "/ta"){TestAnimation();}
+    if(cmd == "/ts"){TestTouchAndScreenshot();}
     if(cmd == "/ed"){eBoard();}
     if(cmd == "/gw"){gameMenu();}
     if(cmd == "/ns"){HX_runNetworkMonitor();}
@@ -9162,6 +9206,7 @@ void openTERMINALApp(){
     if(cmd == "/nt"){FS_notesPro();}
     if(cmd == "/sd"){if(SD_begin()) {SD_info();} }
     if(cmd == "/fs"){FS_visual(); }
+    if(cmd == "/sh"){takeScreenshot(); }
     if(cmd == "/t"){if(alertBox("Test?", "!", true)){display.println("OK");}else{display.println("no OK");} }
     if(cmd == "q")return;
     if(cmd == "")return;
@@ -9596,7 +9641,7 @@ function clearAll(){
         int y = tp[i].y;
 
         // Якщо у верхньому лівому куті — очистити
-        if (x > 50 && y < 20) {
+        if (x < 200 && y < 20) {
           display.clear(TFT_WHITE);
           display.display();
           HTTPClient http;
@@ -9605,6 +9650,7 @@ function clearAll(){
           http.end();
         }
         if(x < 20 && y < 20){return;}
+        if(x > 300 && y < 20){takeScreenshot();}
 
         uint16_t color = toolIsEraser ? TFT_WHITE : TFT_BLACK;
         display.fillCircle(x, y, 4, color);
@@ -11004,6 +11050,74 @@ void CheckersGame() {
 //--- end ai code ---
 //========TEST MENU===========
 //--- ai code ---
+void TestTouchAndScreenshot() {
+  
+  display.fillScreen(TFT_WHITE);
+  display.setTextColor(TFT_BLACK);
+ 
+
+  // --- малюємо тестову сцену ---
+  display.drawString("Touch Test + Screenshot Demo", 20, 20);
+
+  // кольорові квадрати
+  display.fillRect(20, 80, 100, 100, TFT_RED);
+  display.fillRect(140, 80, 100, 100, TFT_GREEN);
+  display.fillRect(260, 80, 100, 100, TFT_BLUE);
+  display.fillRect(380, 80, 100, 100, TFT_YELLOW);
+
+  // кола
+  display.fillCircle(100, 250, 40, TFT_CYAN);
+  display.fillCircle(220, 250, 40, TFT_MAGENTA);
+  display.fillCircle(340, 250, 40, TFT_ORANGE);
+
+  // лінії
+  for (int i = 0; i < 480; i += 20) display.drawLine(i, 350, i, 380, TFT_DARKGREY);
+  for (int j = 350; j <= 380; j += 10) display.drawLine(0, j, 480, j, TFT_DARKGREY);
+
+  display.drawString("Touch to see coords. Tap top-right to screenshot.", 20, 420);
+
+  bool exit = false;
+  while (!exit) {
+    int16_t tx, ty;
+    if (display.getTouch(&tx, &ty)) {
+      // показ координат
+      display.fillRect(0, 440, 480, 40, TFT_WHITE);
+      display.setTextColor(TFT_BLACK);
+      display.setTextSize(2);
+      display.drawString("Touch: X=" + String(tx) + "  Y=" + String(ty), 20, 450);
+
+      // маркер дотику
+      display.fillCircle(tx, ty, 8, TFT_BLACK);
+
+      // вихід у лівому верхньому куті
+      if (tx < 30 && ty < 30) {
+        exit = true;
+        break;
+      }
+
+      // виклик скріншота в правому верхньому куті
+      if (tx > display.width() - 60 && ty < 60) {
+        display.fillRect(display.width() - 100, 0, 100, 40, TFT_YELLOW);
+        display.drawString("...", display.width() - 80, 10);
+        display.display();
+        takeScreenshot();
+        display.fillRect(display.width() - 100, 0, 100, 40, TFT_WHITE);
+        display.drawString("Done", display.width() - 100, 10);
+        delay(800);
+        display.fillRect(display.width() - 100, 0, 100, 40, TFT_WHITE);
+      }
+
+      delay(150); // щоб не ловило одразу кілька тапів
+    }
+  }
+
+  // очищення після виходу
+  display.fillScreen(TFT_WHITE);
+  display.setTextColor(TFT_BLACK);
+  display.drawString("Exit Touch Test", 120, 240);
+  delay(400);
+}
+
 void TouchTest() {
   display.fillScreen(TFT_WHITE);
   display.setCursor(10,20);
@@ -11694,7 +11808,7 @@ void FS_visual() {
                             String n = items[k];
                             String nl = n;
                             nl.toLowerCase();
-                            if(nl.endsWith(".jpg") || nl.endsWith(".jpeg") || nl.endsWith(".png")) {
+                            if(nl.endsWith(".jpg") || nl.endsWith(".jpeg") || nl.endsWith(".png") || nl.endsWith(".bmp")) {
                                 images[imgCount++] = items[k];
                             }
                         }
@@ -11723,12 +11837,14 @@ void FS_visual() {
                                 display.fillScreen(TFT_WHITE);
                                 if(selected.endsWith(".jpg") || selected.endsWith(".JPG") || selected.endsWith(".jpeg"))
                                     display.drawJpg(buf, fileSize, 0, 0);
-                                else
+                                else if(selected.endsWith(".png") || selected.endsWith(".PNG"))
                                     display.drawPng(buf, fileSize, 0, 0);
+                                else 
+                                    display.drawBmp(buf, fileSize, 0, 0);
                                 free(buf);
                             } else {
                                 display.fillScreen(TFT_WHITE);
-                                display.setCursor(0,10);
+                                display.setCursor(0,25);
                                 display.println("Not enough RAM!");
                                 display.display();
                                 f.close();
@@ -11760,7 +11876,7 @@ void FS_visual() {
                             if(!buf) {
                                 // пам'яті не вистачає
                                 display.fillScreen(TFT_WHITE);
-                                display.setCursor(0,10);
+                                display.setCursor(0,25);
                                 display.println("Not enough RAM for image!");
                                 display.display();
                                 fimg.close();
@@ -11782,8 +11898,10 @@ void FS_visual() {
                             String limg = imgName; limg.toLowerCase();
                             if(limg.endsWith(".jpg") || limg.endsWith(".jpeg"))
                                 display.drawJpg(buf, fileSize, 0, 0);
-                            else
+                            else if(limg.endsWith(".png") || limg.endsWith(".PNG"))
                                 display.drawPng(buf, fileSize, 0, 0);
+                            else
+                                display.drawBmp(buf, fileSize, 0, 0);
                             free(buf);
 
                             // Показуємо кнопки внизу та індикацію сторінок
@@ -12585,6 +12703,7 @@ void openPaintApp() {
 
     if (display.getTouch(&x, &y)) {
       if (x < 20 && y < 20) break;
+      if(x > 500 && y < 20){takeScreenshot();}
     }
   }
 }
