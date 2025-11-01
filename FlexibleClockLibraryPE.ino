@@ -9011,6 +9011,252 @@ void takeScreenshot() {
 
 }
 
+//--- paintpro ---
+
+
+
+
+#define MAX_STROKES 50
+#define MAX_POINTS  150
+struct Point { int16_t x, y; };
+struct Stroke {
+  Point *pts;
+  uint16_t count;
+  uint16_t color;
+  uint8_t size;
+  bool erase;
+};
+
+void drawThickLine(M5GFX &d,int x0,int y0,int x1,int y1,uint16_t color,uint8_t size){
+  d.drawLine(x0,y0,x1,y1,color);
+  d.fillCircle(x1,y1,size/2,color);
+}
+
+// --- згладжена лінія (інтерпольована) ---
+void smoothLine(M5GFX &d, int x0, int y0, int x1, int y1, uint16_t color, uint8_t size) {
+  int dx = x1 - x0;
+  int dy = y1 - y0;
+  int steps = max(abs(dx), abs(dy));
+  if (steps == 0) return;
+  for (int i = 0; i <= steps; i++) {
+    int x = x0 + dx * i / steps;
+    int y = y0 + dy * i / steps;
+    d.fillCircle(x, y, size / 2, color);
+  }
+}
+
+void PaintPro() {
+  display.init();
+  display.setRotation(0);  
+  display.fillScreen(0xFFFF);
+  display.setTextColor(0x0000);
+  display.setTextSize(1);
+
+  const uint16_t W = display.width();
+  const uint16_t H = display.height();
+  const uint16_t BG = 0xFFFF;
+  const uint16_t UI_TOP = 60;
+  const uint16_t UI_BOTTOM = 60;
+
+  const uint16_t palette[] = {0x0000,0xF800,0x07E0,0x001F,0xFFE0,0xF81F,0x07FF};
+  const int PALETTE_CNT = sizeof(palette)/sizeof(palette[0]);
+
+  Stroke *strokes = (Stroke*)malloc(sizeof(Stroke)*MAX_STROKES);
+  if(!strokes){ display.println("Out of RAM"); delay(5000); return; }
+  int strokeCount = 0;
+
+  uint16_t curColor = 0x0000;
+  uint8_t curSize = 3;
+  bool isEraser = false;
+  bool uiHidden = false;
+  bool smooth = true;
+  bool stabilize = false;
+
+  auto drawButton = [&](int x,int y,int w,int h,const char* text,bool active=false){
+    uint16_t col = active ? 0x7BEF : 0xCE79; // темніша при активі
+    display.fillRoundRect(x,y,w,h,4,col);
+    display.drawRoundRect(x,y,w,h,4,0x0000);
+    display.setTextDatum(CC_DATUM);
+    display.setTextColor(0x0000);
+    display.drawString(text,x+w/2,y+h/2);
+  };
+
+  auto drawTopUI = [&](){
+    if(uiHidden) return;
+    display.fillRect(0,0,W,UI_TOP,0xCE79);
+    drawButton(5,5,50,30,"U");
+    drawButton(60,5,50,30,"R");
+    drawButton(W-115,5,50,30,"SAVE");
+    drawButton(W-60,5,50,30,uiHidden?"SH":"HD");
+
+    // нові кнопки режимів
+    drawButton(5,35,90,22,"Smooth", smooth);
+    drawButton(100,35,100,22,"Stabilize", stabilize);
+  };
+
+  auto drawBottomUI = [&](){
+    if(uiHidden) return;
+    display.fillRect(0,H-UI_BOTTOM,W,UI_BOTTOM,0xCE79);
+    int y = H-UI_BOTTOM+10;
+    for(int i=0;i<PALETTE_CNT;i++){
+      int x=10+i*30;
+      display.fillRect(x,y,24,24,palette[i]);
+      display.drawRect(x,y,24,24,0x0000);
+      if(!isEraser && palette[i]==curColor)
+        display.drawRoundRect(x-2,y-2,28,28,3,0xF800);
+    }
+    int ex = 10+PALETTE_CNT*30+5;
+    display.fillRect(ex,y,24,24,0xFFFF);
+    display.drawRect(ex,y,24,24,0x0000);
+    display.drawString("E",ex+8,y+6);
+
+    // повзунок товщини
+    int sx = W-100;
+    int sy = H-UI_BOTTOM+10;
+    display.drawRect(sx,sy,80,24,0x0000);
+    int knobX = sx + (curSize * 0.8);
+    if (knobX > sx+78) knobX = sx+78;
+    display.fillCircle(knobX,sy+12,6,0x0000);
+    display.drawString(String(curSize),sx+25,sy+30);
+  };
+
+  auto clearCanvas=[&](){ display.fillRect(0,UI_TOP,W,H-UI_TOP-UI_BOTTOM,BG); };
+
+  auto redrawAll=[&](){
+    clearCanvas();
+    for(int i=0;i<strokeCount;i++){
+      Stroke &s=strokes[i];
+      uint16_t col=s.erase?BG:s.color;
+      for(int j=1;j<s.count;j++)
+        (smooth ? smoothLine(display,s.pts[j-1].x,s.pts[j-1].y,s.pts[j].x,s.pts[j].y,col,s.size)
+                : drawThickLine(display,s.pts[j-1].x,s.pts[j-1].y,s.pts[j].x,s.pts[j].y,col,s.size));
+    }
+  };
+
+  drawTopUI(); drawBottomUI(); display.display();
+
+  int16_t tx,ty;
+  Stroke cur; cur.pts=(Point*)malloc(sizeof(Point)*MAX_POINTS);
+
+  // стабілізатор параметри
+  float sx=0, sy=0; // поточна усереднена позиція
+  const float stabFactor = 0.2; // чим менше — тим повільніше реагує
+
+  while(true){
+    if(!display.getTouch(&tx,&ty)){ delay(10); continue; }
+
+    // --- кнопки ---
+    if(!uiHidden && ty<UI_TOP){
+      if(tx<55 && strokeCount>0){ // undo
+        free(strokes[--strokeCount].pts);
+        redrawAll(); display.display();
+      }
+      else if(tx>W-115 && tx<W-65){ // save
+        display.fillRect(0,0,W,UI_TOP,BG);
+        display.fillRect(0,H-UI_BOTTOM,W,UI_BOTTOM,BG);
+        takeScreenshot(); 
+        drawTopUI(); drawBottomUI(); display.display();
+      }
+      else if(tx>W-60){ // hide/show
+        uiHidden=!uiHidden;
+        if(uiHidden){
+          display.fillRect(0,0,W,UI_TOP,BG);
+          display.fillRect(0,H-UI_BOTTOM,W,UI_BOTTOM,BG);
+        } else {
+          drawTopUI(); drawBottomUI(); display.display();
+        }
+      }
+      else if(tx>=5 && tx<=95 && ty>=35 && ty<=57){ // toggle smooth
+        smooth=!smooth;
+        drawTopUI(); display.display();
+      }
+      else if(tx>=100 && tx<=200 && ty>=35 && ty<=57){ // toggle stabilize
+        stabilize=!stabilize;
+        drawTopUI(); display.display();
+      }
+      continue;
+    }
+
+    // --- палітра ---
+    if(!uiHidden && ty>H-UI_BOTTOM){
+      int y = H-UI_BOTTOM+10;
+      for(int i=0;i<PALETTE_CNT;i++){
+        int x=10+i*30;
+        if(tx>=x && tx<=x+24 && ty>=y && ty<=y+24){
+          curColor=palette[i]; isEraser=false;
+          drawBottomUI(); display.display();
+        }
+      }
+      int ex = 10+PALETTE_CNT*30+5;
+      if(tx>=ex && tx<=ex+24 && ty>=y && ty<=y+24){
+        isEraser=true; drawBottomUI(); display.display();
+      }
+
+      int sx=W-100, sy=H-UI_BOTTOM+10;
+      if(tx>=sx && tx<=sx+80 && ty>=sy && ty<=sy+24){
+        curSize=(tx-sx);
+        if(curSize<1)curSize=1; if(curSize>100)curSize=100;
+        drawBottomUI(); display.display();
+      }
+      continue;
+    }
+
+    // --- малювання ---
+    if(ty>=UI_TOP && ty<=H-UI_BOTTOM){
+      cur.count=0; cur.color=curColor; cur.size=curSize; cur.erase=isEraser;
+      bool wasTouch = true;
+      uint32_t touchLost = 0;
+      sx = tx; sy = ty;
+
+      while (true) {
+        if (display.getTouch(&tx,&ty)) {
+          wasTouch = true;
+          touchLost = 0;
+
+          if(stabilize){ // згладжене положення
+            sx = sx + (tx - sx) * stabFactor;
+            sy = sy + (ty - sy) * stabFactor;
+          } else {
+            sx = tx; sy = ty;
+          }
+
+          if(cur.count<MAX_POINTS){
+            cur.pts[cur.count++]={(int)sx,(int)sy};
+            uint16_t c=isEraser?BG:curColor;
+            if(cur.count>1)
+              (smooth ? smoothLine(display,cur.pts[cur.count-2].x,cur.pts[cur.count-2].y,sx,sy,c,cur.size)
+                      : drawThickLine(display,cur.pts[cur.count-2].x,cur.pts[cur.count-2].y,sx,sy,c,cur.size));
+          }
+        } else {
+          if (wasTouch && touchLost == 0) touchLost = millis();
+          if (wasTouch && millis() - touchLost < 120) continue;
+          else break;
+        }
+        delay(5);
+      }
+
+      if(cur.count>1 && strokeCount<MAX_STROKES){
+        strokes[strokeCount].pts=(Point*)malloc(sizeof(Point)*cur.count);
+        memcpy(strokes[strokeCount].pts,cur.pts,sizeof(Point)*cur.count);
+        strokes[strokeCount].count=cur.count;
+        strokes[strokeCount].color=cur.color;
+        strokes[strokeCount].size=cur.size;
+        strokes[strokeCount].erase=cur.erase;
+        strokeCount++;
+        if(strokeCount>MAX_STROKES) strokeCount=MAX_STROKES;
+      }
+      display.display();
+    }
+  }
+
+  for(int i=0;i<strokeCount;i++) free(strokes[i].pts);
+  free(strokes); free(cur.pts);
+}
+
+
+
+
+
 
 //---------------
 //--- taskbar ---
@@ -9190,6 +9436,7 @@ void openTERMINALApp(){
     String cmd = showSimpleKeyboard(display);
     if(cmd == "/beacon"){wifi_beacon_flooder();}
     if(cmd == "/paint"){openPaintApp();}
+    if(cmd == "/pp"){PaintPro();}
     if(cmd == "/bj21"){Blackjack21();}
     if(cmd == "/tt"){TouchTest();}
     if(cmd == "/ta"){TestAnimation();}
