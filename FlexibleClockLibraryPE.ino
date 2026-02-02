@@ -9013,11 +9013,17 @@ void takeScreenshot() {
 
 //--- paintpro ---
 
+//--- PaintPro E-Ink Edition (Optimized) ---
 
+// Використовуємо стандартні можливості M5GFX, які вже є у твоєму проекті
+// Ніяких нових бібліотек, але логіка повністю змінена.
 
+//--- PaintPro E-Ink Edition (Fixed & Improved) ---
 
-#define MAX_STROKES 50
-#define MAX_POINTS  150
+// Константи лімітів
+#define MAX_STROKES 60
+#define MAX_POINTS  200
+
 struct Point { int16_t x, y; };
 struct Stroke {
   Point *pts;
@@ -9027,232 +9033,182 @@ struct Stroke {
   bool erase;
 };
 
-void drawThickLine(M5GFX &d,int x0,int y0,int x1,int y1,uint16_t color,uint8_t size){
-  d.drawLine(x0,y0,x1,y1,color);
-  d.fillCircle(x1,y1,size/2,color);
-}
-
-// --- згладжена лінія (інтерпольована) ---
-void smoothLine(M5GFX &d, int x0, int y0, int x1, int y1, uint16_t color, uint8_t size) {
-  int dx = x1 - x0;
-  int dy = y1 - y0;
-  int steps = max(abs(dx), abs(dy));
-  if (steps == 0) return;
-  for (int i = 0; i <= steps; i++) {
-    int x = x0 + dx * i / steps;
-    int y = y0 + dy * i / steps;
-    d.fillCircle(x, y, size / 2, color);
-  }
-}
-
 void PaintPro() {
   display.init();
   display.setRotation(0);  
   display.fillScreen(0xFFFF);
-  display.setTextColor(0x0000);
-  display.setTextSize(1);
 
   const uint16_t W = display.width();
   const uint16_t H = display.height();
   const uint16_t BG = 0xFFFF;
-  const uint16_t UI_TOP = 60;
-  const uint16_t UI_BOTTOM = 60;
+  
+  // Зменшені розміри UI
+  const uint16_t UI_TOP = 32;
+  const uint16_t UI_BOTTOM = 40;
 
-  const uint16_t palette[] = {0x0000,0xF800,0x07E0,0x001F,0xFFE0,0xF81F,0x07FF};
+  const uint16_t palette[] = {0x0000, 0xF800, 0x07E0, 0x001F, 0xFFE0, 0xF81F, 0x07FF};
   const int PALETTE_CNT = sizeof(palette)/sizeof(palette[0]);
 
   Stroke *strokes = (Stroke*)malloc(sizeof(Stroke)*MAX_STROKES);
-  if(!strokes){ display.println("Out of RAM"); delay(5000); return; }
   int strokeCount = 0;
 
   uint16_t curColor = 0x0000;
-  uint8_t curSize = 3;
+  uint8_t curSize = 4;
   bool isEraser = false;
   bool uiHidden = false;
   bool smooth = true;
-  bool stabilize = false;
 
-  auto drawButton = [&](int x,int y,int w,int h,const char* text,bool active=false){
-    uint16_t col = active ? 0x7BEF : 0xCE79; // темніша при активі
-    display.fillRoundRect(x,y,w,h,4,col);
-    display.drawRoundRect(x,y,w,h,4,0x0000);
+  // Швидке малювання лінії (оптимізовано)
+  auto drawFastLine = [&](int x0, int y0, int x1, int y1, uint16_t col, uint8_t sz) {
+    if (sz <= 1) {
+      display.drawLine(x0, y0, x1, y1, col);
+    } else {
+      display.fillCircle(x0, y0, sz/2, col);
+      display.fillCircle(x1, y1, sz/2, col);
+      // Для товстих ліній малюємо кілька паралельних ліній (проста імітація товщини)
+      display.fillSmoothRoundRect(min(x0,x1)-sz/2, min(y0,y1)-sz/2, abs(x1-x0)+sz, abs(y1-y0)+sz, sz/2, col);
+      // Але в M5GFX краще використовувати вбудований drawWideLine якщо доступно, 
+      // або залишити цей варіант для швидкості:
+      display.drawLine(x0, y0, x1, y1, col); 
+    }
+  };
+
+  auto drawButton = [&](int x, int y, int w, int h, const char* text, bool active = false) {
+    uint16_t bCol = active ? 0xAD55 : 0xE71C;
+    display.fillRoundRect(x, y, w, h, 3, bCol);
+    display.drawRoundRect(x, y, w, h, 3, 0x0000);
+    display.setTextColor(active ? 0xFFFF : 0x0000);
     display.setTextDatum(CC_DATUM);
+    display.drawString(text, x + w/2, y + h/2 + 1);
+  };
+
+  auto drawTopUI = [&]() {
+    if(uiHidden) return;
+    display.fillRect(0, 0, W, UI_TOP, 0xDEFB);
+    display.drawFastHLine(0, UI_TOP-1, W, 0x0000);
+    
+    drawButton(4, 4, 45, 24, "<");
+    drawButton(54, 4, 45, 24, "H");
+    drawButton(105, 4, 60, 24, "SMTH", smooth);
+    drawButton(W-65, 4, 60, 24, "SAVE");
+  };
+
+  auto drawBottomUI = [&]() {
+    if(uiHidden) return;
+    display.fillRect(0, H-UI_BOTTOM, W, UI_BOTTOM, 0xDEFB);
+    display.drawFastHLine(0, H-UI_BOTTOM, W, 0x0000);
+
+    // Палітра
+    for(int i=0; i<PALETTE_CNT; i++) {
+      int x = 6 + i*22;
+      display.fillRect(x, H-32, 18, 18, palette[i]);
+      display.drawRect(x, H-32, 18, 18, 0x0000);
+      if(!isEraser && curColor == palette[i]) display.drawRect(x-2, H-34, 22, 22, 0xF800);
+    }
+    
+    // Гумка
+    int ex = 6 + PALETTE_CNT*22 + 4;
+    drawButton(ex, H-32, 24, 20, "E", isEraser);
+
+    // Слайдер ширини
+    int sx = W-85, sy = H-25;
+    display.drawFastHLine(sx, sy, 70, 0x0000);
+    int knobX = sx + map(curSize, 1, 50, 0, 70);
+    display.fillCircle(knobX, sy, 6, 0x4208);
     display.setTextColor(0x0000);
-    display.drawString(text,x+w/2,y+h/2);
+    display.drawString("W: " + String(curSize), W-50, H-35);
   };
 
-  auto drawTopUI = [&](){
-    if(uiHidden) return;
-    display.fillRect(0,0,W,UI_TOP,0xCE79);
-    drawButton(5,5,50,30,"U");
-    drawButton(60,5,50,30,"R");
-    drawButton(W-115,5,50,30,"SAVE");
-    drawButton(W-60,5,50,30,uiHidden?"SH":"HD");
-
-    // нові кнопки режимів
-    drawButton(5,35,90,22,"Smooth", smooth);
-    drawButton(100,35,100,22,"Stabilize", stabilize);
-  };
-
-  auto drawBottomUI = [&](){
-    if(uiHidden) return;
-    display.fillRect(0,H-UI_BOTTOM,W,UI_BOTTOM,0xCE79);
-    int y = H-UI_BOTTOM+10;
-    for(int i=0;i<PALETTE_CNT;i++){
-      int x=10+i*30;
-      display.fillRect(x,y,24,24,palette[i]);
-      display.drawRect(x,y,24,24,0x0000);
-      if(!isEraser && palette[i]==curColor)
-        display.drawRoundRect(x-2,y-2,28,28,3,0xF800);
-    }
-    int ex = 10+PALETTE_CNT*30+5;
-    display.fillRect(ex,y,24,24,0xFFFF);
-    display.drawRect(ex,y,24,24,0x0000);
-    display.drawString("E",ex+8,y+6);
-
-    // повзунок товщини
-    int sx = W-100;
-    int sy = H-UI_BOTTOM+10;
-    display.drawRect(sx,sy,80,24,0x0000);
-    int knobX = sx + (curSize * 0.8);
-    if (knobX > sx+78) knobX = sx+78;
-    display.fillCircle(knobX,sy+12,6,0x0000);
-    display.drawString(String(curSize),sx+25,sy+30);
-  };
-
-  auto clearCanvas=[&](){ display.fillRect(0,UI_TOP,W,H-UI_TOP-UI_BOTTOM,BG); };
-
-  auto redrawAll=[&](){
-    clearCanvas();
-    for(int i=0;i<strokeCount;i++){
-      Stroke &s=strokes[i];
-      uint16_t col=s.erase?BG:s.color;
-      for(int j=1;j<s.count;j++)
-        (smooth ? smoothLine(display,s.pts[j-1].x,s.pts[j-1].y,s.pts[j].x,s.pts[j].y,col,s.size)
-                : drawThickLine(display,s.pts[j-1].x,s.pts[j-1].y,s.pts[j].x,s.pts[j].y,col,s.size));
-    }
-  };
-
-  drawTopUI(); drawBottomUI(); display.display();
-
-  int16_t tx,ty;
-  Stroke cur; cur.pts=(Point*)malloc(sizeof(Point)*MAX_POINTS);
-
-  // стабілізатор параметри
-  float sx=0, sy=0; // поточна усереднена позиція
-  const float stabFactor = 0.2; // чим менше — тим повільніше реагує
-
-  while(true){
-    if(!display.getTouch(&tx,&ty)){ delay(10); continue; }
-
-    // --- кнопки ---
-    if(!uiHidden && ty<UI_TOP){
-      if(tx<55 && strokeCount>0){ // undo
-        free(strokes[--strokeCount].pts);
-        redrawAll(); display.display();
+  auto redrawAll = [&]() {
+    display.fillRect(0, 0, W, H, BG); // Очистка повна
+    for(int i=0; i<strokeCount; i++) {
+      Stroke &s = strokes[i];
+      uint16_t col = s.erase ? BG : s.color;
+      for(int j=1; j<s.count; j++) {
+        if(smooth) display.drawWideLine(s.pts[j-1].x, s.pts[j-1].y, s.pts[j].x, s.pts[j].y, s.size, col);
+        else display.drawLine(s.pts[j-1].x, s.pts[j-1].y, s.pts[j].x, s.pts[j].y, col);
       }
-      else if(tx>W-115 && tx<W-65){ // save
-        display.fillRect(0,0,W,UI_TOP,BG);
-        display.fillRect(0,H-UI_BOTTOM,W,UI_BOTTOM,BG);
-        takeScreenshot(); 
-        drawTopUI(); drawBottomUI(); display.display();
-      }
-      else if(tx>W-60){ // hide/show
-        uiHidden=!uiHidden;
-        if(uiHidden){
-          display.fillRect(0,0,W,UI_TOP,BG);
-          display.fillRect(0,H-UI_BOTTOM,W,UI_BOTTOM,BG);
-        } else {
-          drawTopUI(); drawBottomUI(); display.display();
+    }
+    drawTopUI(); drawBottomUI();
+  };
+
+  drawTopUI(); drawBottomUI();
+  
+  Point *tempPts = (Point*)malloc(sizeof(Point)*MAX_POINTS);
+  int16_t tx, ty;
+
+  while(true) {
+    if(display.getTouch(&tx, &ty)) {
+      // Обробка UI
+      if(!uiHidden && ty < UI_TOP) {
+        if(tx < 50 && strokeCount > 0) { // Undo
+          free(strokes[--strokeCount].pts);
+          redrawAll();
+        } else if(tx > 50 && tx < 100) { // Hide
+          uiHidden = true; redrawAll();
+        } else if(tx > 105 && tx < 165) { // Smooth
+          smooth = !smooth; drawTopUI();
+        } else if(tx > W-65) { // Save
+          uiHidden = true; redrawAll();
+          takeScreenshot();
+          uiHidden = false; redrawAll();
         }
-      }
-      else if(tx>=5 && tx<=95 && ty>=35 && ty<=57){ // toggle smooth
-        smooth=!smooth;
-        drawTopUI(); display.display();
-      }
-      else if(tx>=100 && tx<=200 && ty>=35 && ty<=57){ // toggle stabilize
-        stabilize=!stabilize;
-        drawTopUI(); display.display();
-      }
-      continue;
-    }
-
-    // --- палітра ---
-    if(!uiHidden && ty>H-UI_BOTTOM){
-      int y = H-UI_BOTTOM+10;
-      for(int i=0;i<PALETTE_CNT;i++){
-        int x=10+i*30;
-        if(tx>=x && tx<=x+24 && ty>=y && ty<=y+24){
-          curColor=palette[i]; isEraser=false;
-          drawBottomUI(); display.display();
-        }
-      }
-      int ex = 10+PALETTE_CNT*30+5;
-      if(tx>=ex && tx<=ex+24 && ty>=y && ty<=y+24){
-        isEraser=true; drawBottomUI(); display.display();
+        delay(150); continue;
       }
 
-      int sx=W-100, sy=H-UI_BOTTOM+10;
-      if(tx>=sx && tx<=sx+80 && ty>=sy && ty<=sy+24){
-        curSize=(tx-sx);
-        if(curSize<1)curSize=1; if(curSize>100)curSize=100;
-        drawBottomUI(); display.display();
-      }
-      continue;
-    }
-
-    // --- малювання ---
-    if(ty>=UI_TOP && ty<=H-UI_BOTTOM){
-      cur.count=0; cur.color=curColor; cur.size=curSize; cur.erase=isEraser;
-      bool wasTouch = true;
-      uint32_t touchLost = 0;
-      sx = tx; sy = ty;
-
-      while (true) {
-        if (display.getTouch(&tx,&ty)) {
-          wasTouch = true;
-          touchLost = 0;
-
-          if(stabilize){ // згладжене положення
-            sx = sx + (tx - sx) * stabFactor;
-            sy = sy + (ty - sy) * stabFactor;
-          } else {
-            sx = tx; sy = ty;
+      if(!uiHidden && ty > H-UI_BOTTOM) {
+        // Клік по палітрі
+        if(tx < 160) {
+          for(int i=0; i<PALETTE_CNT; i++) {
+            if(tx > 6+i*22 && tx < 24+i*22) { curColor = palette[i]; isEraser = false; }
           }
-
-          if(cur.count<MAX_POINTS){
-            cur.pts[cur.count++]={(int)sx,(int)sy};
-            uint16_t c=isEraser?BG:curColor;
-            if(cur.count>1)
-              (smooth ? smoothLine(display,cur.pts[cur.count-2].x,cur.pts[cur.count-2].y,sx,sy,c,cur.size)
-                      : drawThickLine(display,cur.pts[cur.count-2].x,cur.pts[cur.count-2].y,sx,sy,c,cur.size));
-          }
-        } else {
-          if (wasTouch && touchLost == 0) touchLost = millis();
-          if (wasTouch && millis() - touchLost < 120) continue;
-          else break;
+          if(tx > 160 && tx < 190) isEraser = true;
+          drawBottomUI();
         }
-        delay(5);
+        // Слайдер
+        if(tx > W-90) {
+          curSize = map(tx - (W-85), 0, 70, 1, 50);
+          if(curSize < 1) curSize = 1; if(curSize > 50) curSize = 50;
+          drawBottomUI();
+        }
+        delay(50); continue;
       }
 
-      if(cur.count>1 && strokeCount<MAX_STROKES){
-        strokes[strokeCount].pts=(Point*)malloc(sizeof(Point)*cur.count);
-        memcpy(strokes[strokeCount].pts,cur.pts,sizeof(Point)*cur.count);
-        strokes[strokeCount].count=cur.count;
-        strokes[strokeCount].color=cur.color;
-        strokes[strokeCount].size=cur.size;
-        strokes[strokeCount].erase=cur.erase;
-        strokeCount++;
-        if(strokeCount>MAX_STROKES) strokeCount=MAX_STROKES;
+      // Малювання
+      if(uiHidden || (ty >= UI_TOP && ty <= H-UI_BOTTOM)) {
+        int pCnt = 0;
+        int16_t lastX = tx, lastY = ty;
+        tempPts[pCnt++] = {tx, ty};
+
+        while(display.getTouch(&tx, &ty)) {
+          if(abs(tx - lastX) > 2 || abs(ty - lastY) > 2) {
+            uint16_t c = isEraser ? BG : curColor;
+            if(smooth) display.drawWideLine(lastX, lastY, tx, ty, curSize, c);
+            else display.drawLine(lastX, lastY, tx, ty, c);
+            
+            lastX = tx; lastY = ty;
+            if(pCnt < MAX_POINTS) tempPts[pCnt++] = {tx, ty};
+          }
+        }
+
+        if(pCnt > 1 && strokeCount < MAX_STROKES) {
+          strokes[strokeCount].pts = (Point*)malloc(sizeof(Point)*pCnt);
+          memcpy(strokes[strokeCount].pts, tempPts, sizeof(Point)*pCnt);
+          strokes[strokeCount].count = pCnt;
+          strokes[strokeCount].color = curColor;
+          strokes[strokeCount].size = curSize;
+          strokes[strokeCount].erase = isEraser;
+          strokeCount++;
+        }
       }
-      display.display();
+    }
+    
+    // Якщо UI сховано, а ми натиснули у верхній кут — повертаємо UI
+    if(uiHidden && display.getTouch(&tx, &ty) && ty < 30 && tx > W-30) {
+       uiHidden = false; redrawAll(); delay(200);
     }
   }
-
-  for(int i=0;i<strokeCount;i++) free(strokes[i].pts);
-  free(strokes); free(cur.pts);
 }
-
 
 
 
@@ -11988,21 +11944,35 @@ void FS_showTextFile(String fullPath) {
   f.close();
 }
 
+
+
+
+
+
 void FS_visual() {
+
     String path = "/";
     bool exitFS = false;
 
+    const int LINE_H = 22;
+    const int HEADER_LINES = 2;
+    const int LIST_Y_START = LINE_H * HEADER_LINES;
+
     while(!exitFS) {
+
         display.fillScreen(TFT_WHITE);
-        display.setCursor(0,0);
+        display.setCursor(0, 22);
         display.setTextColor(TFT_BLACK);
         display.println(".. <- Back");
 
         File dir = SD.open(path);
         if(!dir){
             display.println("Cannot open directory!");
+            display.display();
             delay(500);
-            if(alertBox("try mounting the card?", "?", true)){if(SD_begin()) {SD_info();}}
+            if(alertBox("try mounting the card?", "?", true)){
+                if(SD_begin()) SD_info();
+            }
             return;
         }
 
@@ -12018,231 +11988,221 @@ void FS_visual() {
             count++;
             file = dir.openNextFile();
         }
+        dir.close();
 
         for(int i=0;i<count;i++){
-            display.println((isDir[i]? "[D] ":"[F] ") + items[i]);
+            display.setCursor(0, LIST_Y_START + i * LINE_H);
+            display.println((isDir[i] ? "[D] " : "[F] ") + items[i]);
         }
+
         display.display();
 
         while(true){
-            int16_t x,y;
+
+            int16_t x, y;
             if(display.getTouch(&x,&y)){
-                display.fillCircle(x, y, 5, TFT_BLACK);
-                // back to parent
-                if(x<20 && y<20){
+
+                // debounce
+                while(display.getTouch(&x,&y)) delay(5);
+
+                // --- BACK ---
+                if(x < 20 && y < LINE_H){
                     if(path == "/") return;
-                    int lastSlash = path.lastIndexOf('/');
-                    if(lastSlash>0) path = path.substring(0,lastSlash);
-                    else path = "/";
+                    int s = path.lastIndexOf('/');
+                    path = (s > 0) ? path.substring(0, s) : "/";
                     break;
                 }
 
-                int idx = (y / 20) - 1;
-                if(idx>=0 && idx<count){
-                    String selected = items[idx];
-                    String fullPath = path + "/" + selected;
+                if(y < LIST_Y_START) continue;
 
-                    if(isDir[idx]){
-                        path = fullPath;
+                int idx = (y - LIST_Y_START) / LINE_H;
+                if(idx < 0 || idx >= count) continue;
+
+                // highlight
+                display.fillRect(0, LIST_Y_START + idx * LINE_H, 540, LINE_H, TFT_BLACK);
+                display.setTextColor(TFT_WHITE);
+                display.setCursor(0, LIST_Y_START + idx * LINE_H);
+                display.println((isDir[idx] ? "[D] " : "[F] ") + items[idx]);
+                display.display();
+                delay(120);
+                display.setTextColor(TFT_BLACK);
+
+                String selected = items[idx];
+                String fullPath = path + "/" + selected;
+
+                if(isDir[idx]){
+                    path = fullPath;
+                    break;
+                }
+
+                // ---------------- IMAGE / FILE HANDLING ----------------
+
+                const int MAX_IMAGES = 100;
+                String images[MAX_IMAGES];
+                int imgCount = 0;
+
+                for(int k=0;k<count && imgCount<MAX_IMAGES;k++){
+                    String n = items[k];
+                    String nl = n; nl.toLowerCase();
+                    if(nl.endsWith(".jpg") || nl.endsWith(".jpeg") || nl.endsWith(".png") || nl.endsWith(".bmp")){
+                        images[imgCount++] = items[k];
+                    }
+                }
+
+                int curImgIndex = -1;
+                for(int k=0;k<imgCount;k++){
+                    if(images[k] == selected){
+                        curImgIndex = k;
                         break;
-                    } else {
-                        // --- IMAGE VIEWER: знизу показуємо < та > ---
-                        // Спочатку зберемо масив тільки з image-файлами у цій папці
-                        const int MAX_IMAGES = 100;
-                        String images[MAX_IMAGES];
-                        int imgCount = 0;
-                        for(int k=0;k<count && imgCount<MAX_IMAGES;k++){
-                            String n = items[k];
-                            String nl = n;
-                            nl.toLowerCase();
-                            if(nl.endsWith(".jpg") || nl.endsWith(".jpeg") || nl.endsWith(".png") || nl.endsWith(".bmp")) {
-                                images[imgCount++] = items[k];
-                            }
-                        }
+                    }
+                }
 
-                        // знайдемо індекс поточного файлу у масиві images
-                        int curImgIndex = -1;
-                        for(int k=0;k<imgCount;k++){
-                            if(images[k] == selected) { curImgIndex = k; break; }
-                        }
-                        if(curImgIndex == -1) {
-                            // файл не в списку image-файлів (можливо інший формат) — просто відкриваємо як раніше
-                            File f = SD.open(fullPath);
-                            if(!f) break;
-                            size_t fileSize = f.size();
-                            if (selected.endsWith(".txt") || selected.endsWith(".log") || selected.endsWith(".dat")) {
-                                    // викликаємо текстовий переглядач
-                                    FS_showTextFile(fullPath);
-                            }else if (selected.endsWith(".buz")) {
-                                    // викликаємо мелодійний переглядач
-                                    FS_buzzerPlay(fullPath);
-                            }
-                            uint8_t *buf = (uint8_t*)malloc(fileSize);
-                            if(buf){
-                                f.read(buf, fileSize);
-                                f.close();
-                                display.fillScreen(TFT_WHITE);
-                                if(selected.endsWith(".jpg") || selected.endsWith(".JPG") || selected.endsWith(".jpeg"))
-                                    display.drawJpg(buf, fileSize, 0, 0);
-                                else if(selected.endsWith(".png") || selected.endsWith(".PNG"))
-                                    display.drawPng(buf, fileSize, 0, 0);
-                                else 
-                                    display.drawBmp(buf, fileSize, 0, 0);
-                                free(buf);
-                            } else {
-                                display.fillScreen(TFT_WHITE);
-                                display.setCursor(0,25);
-                                display.println("Not enough RAM!");
-                                display.display();
-                                f.close();
-                            }
-                            // wait for back
-                            while(true){
-                                int16_t bx,by;
-                                if(display.getTouch(&bx,&by)){
-                                    if(bx<20 && by<20) break;
-                                }
-                            }
-                            break;
-                        }
+                // ---------- NON IMAGE ----------
+                if(curImgIndex == -1){
 
-                        // --- Переходимо в режим перегляду з навігацією ---
-                        bool viewerExit = false;
-                        while(!viewerExit){
-                            // відкриваємо поточну картинку
-                            String imgName = images[curImgIndex];
-                            String imgPath = path + "/" + imgName;
-                            File fimg = SD.open(imgPath);
-                            if(!fimg) {
-                                // неможливо відкрити — вихід до списку
+                    if(selected.endsWith(".txt") || selected.endsWith(".log") || selected.endsWith(".dat")){
+                        FS_showTextFile(fullPath);
+                        break;
+                    }
+
+                    if(selected.endsWith(".buz")){
+                        FS_buzzerPlay(fullPath);
+                        break;
+                    }
+
+                    File f = SD.open(fullPath);
+                    if(!f) break;
+
+                    size_t sz = f.size();
+                    uint8_t *buf = (uint8_t*)malloc(sz);
+
+                    if(!buf){
+                        display.fillScreen(TFT_WHITE);
+                        display.setCursor(0,25);
+                        display.println("Not enough RAM!");
+                        display.display();
+                        f.close();
+                        break;
+                    }
+
+                    f.read(buf, sz);
+                    f.close();
+
+                    display.fillScreen(TFT_WHITE);
+                    String l = selected; l.toLowerCase();
+
+                    if(l.endsWith(".jpg") || l.endsWith(".jpeg"))
+                        display.drawJpg(buf, sz, 0, 0);
+                    else if(l.endsWith(".png"))
+                        display.drawPng(buf, sz, 0, 0);
+                    else
+                        display.drawBmp(buf, sz, 0, 0);
+
+                    free(buf);
+                    display.display();
+
+                    while(true){
+                        int16_t bx,by;
+                        if(display.getTouch(&bx,&by)){
+                            while(display.getTouch(&bx,&by)) delay(5);
+                            if(bx < 20 && by < LINE_H) break;
+                        }
+                    }
+                    break;
+                }
+
+                // ---------------- IMAGE VIEWER ----------------
+
+                bool viewerExit = false;
+                const int W = 540;
+                const int H = 960;
+                const int btnH = 30;
+                const int btnW = 50;
+                const int margin = 8;
+                const int yBtn = H - btnH - margin;
+
+                while(!viewerExit){
+
+                    String imgPath = path + "/" + images[curImgIndex];
+                    File fimg = SD.open(imgPath);
+                    if(!fimg) break;
+
+                    size_t sz = fimg.size();
+                    uint8_t *buf = (uint8_t*)malloc(sz);
+                    if(!buf){
+                        fimg.close();
+                        break;
+                    }
+
+                    fimg.read(buf, sz);
+                    fimg.close();
+
+                    display.fillScreen(TFT_WHITE);
+                    String l = images[curImgIndex]; l.toLowerCase();
+
+                    if(l.endsWith(".jpg") || l.endsWith(".jpeg"))
+                        display.drawJpg(buf, sz, 0, 0);
+                    else if(l.endsWith(".png"))
+                        display.drawPng(buf, sz, 0, 0);
+                    else
+                        display.drawBmp(buf, sz, 0, 0);
+
+                    free(buf);
+
+                    // buttons
+                    if(curImgIndex > 0){
+                        display.fillRoundRect(margin, yBtn, btnW, btnH, 6, TFT_BLACK);
+                        display.setTextColor(TFT_WHITE);
+                        display.drawCentreString("<", margin + btnW/2, yBtn + 6, 2);
+                    }
+
+                    if(curImgIndex < imgCount - 1){
+                        display.fillRoundRect(W - margin - btnW, yBtn, btnW, btnH, 6, TFT_BLACK);
+                        display.setTextColor(TFT_WHITE);
+                        display.drawCentreString(">", W - margin - btnW/2, yBtn + 6, 2);
+                    }
+
+                    display.setTextColor(TFT_BLACK);
+                    display.drawCentreString(
+                        String(curImgIndex+1) + "/" + String(imgCount),
+                        W/2,
+                        yBtn + 6,
+                        2
+                    );
+
+                    display.display();
+
+                    bool inner = false;
+                    while(!inner){
+                        int16_t tx,ty;
+                        if(display.getTouch(&tx,&ty)){
+                            while(display.getTouch(&tx,&ty)) delay(5);
+
+                            if(tx < 20 && ty < LINE_H){
                                 viewerExit = true;
                                 break;
                             }
-                            size_t fileSize = fimg.size();
-                            uint8_t *buf = (uint8_t*)malloc(fileSize);
-                            if(!buf) {
-                                // пам'яті не вистачає
-                                display.fillScreen(TFT_WHITE);
-                                display.setCursor(0,25);
-                                display.println("Not enough RAM for image!");
-                                display.display();
-                                fimg.close();
-                                // чекати тап назад
-                                while(true){
-                                    int16_t bx,by;
-                                    if(display.getTouch(&bx,&by)){
-                                        if(bx<20 && by<20) break;
-                                    }
-                                }
-                                viewerExit = true;
-                                break;
-                            }
-                            fimg.read(buf, fileSize);
-                            fimg.close();
 
-                            // намалювати картинку
-                            display.fillScreen(TFT_WHITE);
-                            String limg = imgName; limg.toLowerCase();
-                            if(limg.endsWith(".jpg") || limg.endsWith(".jpeg"))
-                                display.drawJpg(buf, fileSize, 0, 0);
-                            else if(limg.endsWith(".png") || limg.endsWith(".PNG"))
-                                display.drawPng(buf, fileSize, 0, 0);
-                            else
-                                display.drawBmp(buf, fileSize, 0, 0);
-                            free(buf);
-
-                            // Показуємо кнопки внизу та індикацію сторінок
-                            int W = 540; // ширина дисплея (M5Paper)
-                            int H = 960; // висота дисплея
-                            int btnH = 30;
-                            int btnW = 50;
-                            int margin = 8;
-                            int yBtn = H - btnH - margin;
-
-                            // Ліва кнопка <
-                            if(curImgIndex > 0) {
-                                display.fillRoundRect(margin, yBtn, btnW, btnH, 6, TFT_BLACK);
-                                display.setTextColor(TFT_WHITE);
-                                display.setTextDatum(textdatum_t::middle_center);
-                                display.drawString("<", margin + btnW/2, yBtn + btnH/2);
-                            } else {
-                                // disabled
-                                display.drawRoundRect(margin, yBtn, btnW, btnH, 6, TFT_BLACK);
-                                display.setTextColor(TFT_BLACK);
-                                display.setTextDatum(textdatum_t::middle_center);
-                                display.drawString("<", margin + btnW/2, yBtn + btnH/2);
+                            if(tx >= margin && tx <= margin + btnW && ty >= yBtn && ty <= yBtn + btnH && curImgIndex > 0){
+                                curImgIndex--;
+                                inner = true;
                             }
 
-                            // Права кнопка >
-                            if(curImgIndex < imgCount - 1) {
-                                display.fillRoundRect(W - margin - btnW, yBtn, btnW, btnH, 6, TFT_BLACK);
-                                display.setTextColor(TFT_WHITE);
-                                display.setTextDatum(textdatum_t::middle_center);
-                                display.drawString(">", W - margin - btnW/2, yBtn + btnH/2);
-                            } else {
-                                display.drawRoundRect(W - margin - btnW, yBtn, btnW, btnH, 6, TFT_BLACK);
-                                display.setTextColor(TFT_BLACK);
-                                display.setTextDatum(textdatum_t::middle_center);
-                                display.drawString(">", W - margin - btnW/2, yBtn + btnH/2);
+                            if(tx >= W - margin - btnW && tx <= W - margin && ty >= yBtn && ty <= yBtn + btnH && curImgIndex < imgCount - 1){
+                                curImgIndex++;
+                                inner = true;
                             }
+                        }
+                        delay(20);
+                    }
+                }
 
-                            // Індикація номера сторінки по центру
-                            String label = String(curImgIndex+1) + " / " + String(imgCount);
-                            display.setTextDatum(textdatum_t::middle_center);
-                            display.setTextColor(TFT_BLACK);
-                            display.drawString(label, W/2, yBtn + btnH/2);
-
-                            display.display(); // відправити оновлення
-
-                            // Чекаємо торк
-                            bool innerBreak = false;
-                            while(!innerBreak){
-                                int16_t tx, ty;
-                                if(display.getTouch(&tx,&ty)){
-                                    // back to file list
-                                    if(tx<20 && ty<20){
-                                        innerBreak = true;
-                                        viewerExit = true;
-                                        break;
-                                    }
-                                    // натиск на ліву кнопку
-                                    if(tx >= margin && tx <= margin + btnW && ty >= yBtn && ty <= yBtn + btnH){
-                                        if(curImgIndex > 0) {
-                                            curImgIndex--;
-                                        }
-                                        innerBreak = true; // перерендиримо
-                                        break;
-                                    }
-                                    // натиск на праву кнопку
-                                    if(tx >= W - margin - btnW && tx <= W - margin && ty >= yBtn && ty <= yBtn + btnH){
-                                        if(curImgIndex < imgCount - 1) {
-                                            curImgIndex++;
-                                        }
-                                        innerBreak = true;
-                                        break;
-                                    }
-                                    // якщо тап по самій картинці — можна зробити next
-                                    int contentTop = 0;
-                                    int contentBottom = yBtn - margin;
-                                    if(ty >= contentTop && ty <= contentBottom){
-                                        // тап у центрі — йдемо на наступну якщо є
-                                        if(curImgIndex < imgCount - 1) { curImgIndex++; innerBreak = true; break; }
-                                    }
-                                }
-                                delay(50);
-                            } // чек торку у viewer
-                        } // viewer loop
-
-                        break; // повернення до списку після viewer або помилки
-                    } // image/file branch
-                } // idx valid
-            } // if touch on list
+                break;
+            }
             delay(10);
-        } // inner while (list loop)
-    } // outer while
+        }
+    }
 }
-
-
 
 
 
@@ -13695,3 +13655,4 @@ void loop() {
   }
 
 }
+
